@@ -75,7 +75,30 @@ export const createTaskHandler: McpToolHandler<CreateTaskInput> = async (input, 
       })
       .returning()
 
-    // Return success response with task ID
+    // Trigger task execution via internal endpoint
+    let executionTriggered = true
+    try {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+      const executeUrl = `${appUrl}/api/tasks/${taskId}/execute`
+
+      const executeResponse = await fetch(executeUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ userId: user.id }),
+      })
+
+      if (!executeResponse.ok) {
+        console.error('Failed to trigger task execution')
+        executionTriggered = false
+      }
+    } catch (error) {
+      console.error('Error triggering task execution')
+      executionTriggered = false
+    }
+
+    // Return success response with task ID and execution status
     return {
       content: [
         {
@@ -85,6 +108,10 @@ export const createTaskHandler: McpToolHandler<CreateTaskInput> = async (input, 
             taskId: newTask.id,
             status: newTask.status,
             createdAt: newTask.createdAt,
+            executionTriggered,
+            message: executionTriggered
+              ? 'Task created and execution started'
+              : 'Task created but execution trigger failed - please check task status',
           }),
         },
       ],

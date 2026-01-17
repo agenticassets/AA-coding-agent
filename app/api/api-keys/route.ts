@@ -6,7 +6,7 @@ import { eq, and } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
 import { encrypt, decrypt } from '@/lib/crypto'
 
-type Provider = 'openai' | 'gemini' | 'cursor' | 'anthropic' | 'aigateway'
+type Provider = 'openai' | 'gemini' | 'cursor' | 'anthropic' | 'aigateway' | 'github'
 
 export async function GET(req: NextRequest) {
   try {
@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Provider and API key are required' }, { status: 400 })
     }
 
-    if (!['openai', 'gemini', 'cursor', 'anthropic', 'aigateway'].includes(provider)) {
+    if (!['openai', 'gemini', 'cursor', 'anthropic', 'aigateway', 'github'].includes(provider)) {
       return NextResponse.json({ error: 'Invalid provider' }, { status: 400 })
     }
 

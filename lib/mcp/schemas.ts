@@ -9,7 +9,11 @@ export const createTaskSchema = z.object({
     .min(1, 'Prompt is required')
     .max(5000, 'Prompt must be 5000 characters or less')
     .describe('The task prompt describing what the AI agent should do'),
-  repoUrl: z.string().url('Must be a valid repository URL').describe('GitHub repository URL to work on'),
+  repoUrl: z
+    .string()
+    .url('Must be a valid repository URL')
+    .optional()
+    .describe('GitHub repository URL to work on. If not provided, runs in standalone mode.'),
   selectedAgent: z
     .enum(['claude', 'codex', 'copilot', 'cursor', 'gemini', 'opencode'])
     .default('claude')
@@ -26,6 +30,12 @@ export const createTaskSchema = z.object({
     .boolean()
     .default(false)
     .describe('Whether to keep the sandbox alive after task completion for debugging'),
+  standalone: z.boolean().default(false).describe('If true, skip GitHub operations and return artifacts directly'),
+  templateRepo: z
+    .string()
+    .url()
+    .optional()
+    .describe('Template repository to initialize from in standalone mode (public, no auth needed)'),
 })
 
 /**

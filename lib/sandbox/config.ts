@@ -8,6 +8,7 @@ export function validateEnvironmentVariables(
     ANTHROPIC_API_KEY?: string
     AI_GATEWAY_API_KEY?: string
   },
+  repoUrl?: string | null,
 ) {
   const errors: string[] = []
 
@@ -50,10 +51,12 @@ export function validateEnvironmentVariables(
     }
   }
 
-  // Check for GitHub token for private repositories
-  // Use user's token if provided
-  if (!githubToken) {
-    errors.push('GitHub is required for repository access. Please connect your GitHub account.')
+  // Check for GitHub token ONLY if a repository URL is provided
+  // For standalone/template mode (no repoUrl), GitHub token is not required
+  if (repoUrl && !githubToken) {
+    errors.push(
+      'GitHub token is required for repository access. Please connect your GitHub account or add a GitHub PAT in API Keys settings.',
+    )
   }
 
   // Check for Vercel sandbox environment variables

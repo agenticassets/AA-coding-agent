@@ -59,15 +59,23 @@ export async function createSandbox(config: SandboxConfig, logger: TaskLogger): 
     }
 
     // Validate required environment variables
-    const envValidation = validateEnvironmentVariables(config.selectedAgent, config.githubToken, config.apiKeys)
+    // Pass repoUrl so GitHub token is only required when a repo is specified
+    const envValidation = validateEnvironmentVariables(
+      config.selectedAgent,
+      config.githubToken,
+      config.apiKeys,
+      config.repoUrl,
+    )
     if (!envValidation.valid) {
       throw new Error(envValidation.error!)
     }
     await logger.info('Environment variables validated')
 
-    // Handle private repository authentication
-    const authenticatedRepoUrl = createAuthenticatedRepoUrl(config.repoUrl, config.githubToken)
-    await logger.info('Added GitHub authentication to repository URL')
+    // Handle private repository authentication (only if repoUrl is provided)
+    const authenticatedRepoUrl = config.repoUrl ? createAuthenticatedRepoUrl(config.repoUrl, config.githubToken) : ''
+    if (config.repoUrl) {
+      await logger.info('Added GitHub authentication to repository URL')
+    }
 
     // Use the specified timeout (maxDuration) for sandbox lifetime
     // keepAlive only controls whether we shutdown after task completion
