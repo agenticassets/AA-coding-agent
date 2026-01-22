@@ -3,6 +3,7 @@ import { getServerSession } from '@/lib/session/get-server-session'
 import { getGitHubStars } from '@/lib/github-stars'
 import { getMaxSandboxDuration } from '@/lib/db/settings'
 import { Metadata } from 'next'
+import { Suspense } from 'react'
 
 interface TaskPageProps {
   params: Promise<{
@@ -12,12 +13,21 @@ interface TaskPageProps {
 
 export default async function TaskPage({ params }: TaskPageProps) {
   const { taskId } = await params
-  const session = await getServerSession()
+  return (
+    <Suspense fallback={<TaskPageFallback />}>
+      <TaskPageShell taskId={taskId} />
+    </Suspense>
+  )
+}
+
+async function TaskPageShell({ taskId }: { taskId: string }) {
+  const sessionPromise = getServerSession()
+  const starsPromise = getGitHubStars()
+  const session = await sessionPromise
 
   // Get max sandbox duration for this user (user-specific > global > env var)
-  const maxSandboxDuration = await getMaxSandboxDuration(session?.user?.id)
-
-  const stars = await getGitHubStars()
+  const maxSandboxDurationPromise = getMaxSandboxDuration(session?.user?.id)
+  const [maxSandboxDuration, stars] = await Promise.all([maxSandboxDurationPromise, starsPromise])
 
   return (
     <TaskPageClient
@@ -30,18 +40,27 @@ export default async function TaskPage({ params }: TaskPageProps) {
   )
 }
 
+function TaskPageFallback() {
+  return (
+    <div className="flex h-full flex-1 items-center justify-center">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground border-r-transparent" />
+    </div>
+  )
+}
+
 export async function generateMetadata({ params }: TaskPageProps): Promise<Metadata> {
-  const { taskId } = await params
-  const session = await getServerSession()
+  const [{ taskId }, session] = await Promise.all([params, getServerSession()])
 
   // Try to fetch the task to get its title
   let pageTitle = `Task ${taskId}`
 
   if (session?.user?.id) {
     try {
-      const { db } = await import('@/lib/db/client')
-      const { tasks } = await import('@/lib/db/schema')
-      const { eq, and, isNull } = await import('drizzle-orm')
+      const [{ db }, { tasks }, { eq, and, isNull }] = await Promise.all([
+        import('@/lib/db/client'),
+        import('@/lib/db/schema'),
+        import('drizzle-orm'),
+      ])
 
       const task = await db
         .select()
@@ -58,9 +77,9 @@ export async function generateMetadata({ params }: TaskPageProps): Promise<Metad
           pageTitle = task[0].prompt.length > 60 ? task[0].prompt.slice(0, 60) + '...' : task[0].prompt
         }
       }
-    } catch (error) {
+    } catch {
       // If fetching fails, fall back to task ID
-      console.error('Failed to fetch task for metadata:', error)
+      console.error('Failed to fetch task metadata')
     }
   }
 

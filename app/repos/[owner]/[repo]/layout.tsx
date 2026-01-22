@@ -2,6 +2,7 @@ import { RepoLayout } from '@/components/repo-layout'
 import { getServerSession } from '@/lib/session/get-server-session'
 import { getGitHubStars } from '@/lib/github-stars'
 import { Metadata } from 'next'
+import { Suspense } from 'react'
 
 interface LayoutPageProps {
   params: Promise<{
@@ -13,8 +14,17 @@ interface LayoutPageProps {
 
 export default async function Layout({ params, children }: LayoutPageProps) {
   const { owner, repo } = await params
-  const session = await getServerSession()
-  const stars = await getGitHubStars()
+  return (
+    <Suspense fallback={<RepoLayoutFallback />}>
+      <RepoLayoutShell owner={owner} repo={repo}>
+        {children}
+      </RepoLayoutShell>
+    </Suspense>
+  )
+}
+
+async function RepoLayoutShell({ owner, repo, children }: { owner: string; repo: string; children: React.ReactNode }) {
+  const [session, stars] = await Promise.all([getServerSession(), getGitHubStars()])
 
   return (
     <RepoLayout
@@ -26,6 +36,19 @@ export default async function Layout({ params, children }: LayoutPageProps) {
     >
       {children}
     </RepoLayout>
+  )
+}
+
+function RepoLayoutFallback() {
+  return (
+    <div className="flex-1 bg-background relative flex flex-col h-full overflow-hidden">
+      <div className="flex-shrink-0 p-3">
+        <div className="h-8 w-48 animate-pulse rounded bg-muted" />
+      </div>
+      <div className="flex-1 px-3">
+        <div className="h-6 w-64 animate-pulse rounded bg-muted" />
+      </div>
+    </div>
   )
 }
 

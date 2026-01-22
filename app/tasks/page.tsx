@@ -4,13 +4,16 @@ import { TasksListClient } from '@/components/tasks-list-client'
 import { redirect } from 'next/navigation'
 
 export default async function TasksListPage() {
-  const session = await getServerSession()
-  const stars = await getGitHubStars()
+  const sessionPromise = getServerSession()
+  const starsPromise = getGitHubStars()
+  const session = await sessionPromise
 
   // Redirect to home if not authenticated
   if (!session?.user) {
     redirect('/')
   }
+
+  const stars = await starsPromise
 
   return <TasksListClient user={session.user} authProvider={session.authProvider} initialStars={stars} />
 }

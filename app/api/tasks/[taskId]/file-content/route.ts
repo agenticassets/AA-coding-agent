@@ -6,6 +6,7 @@ import { getOctokit } from '@/lib/github/client'
 import { getServerSession } from '@/lib/session/get-server-session'
 import { PROJECT_DIR } from '@/lib/sandbox/commands'
 import type { Octokit } from '@octokit/rest'
+import { performance } from 'node:perf_hooks'
 
 function getLanguageFromFilename(filename: string): string {
   const ext = filename.split('.').pop()?.toLowerCase()
@@ -141,15 +142,16 @@ async function getFileContent(
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ taskId: string }> }) {
   try {
-    const session = await getServerSession()
+    const requestStart = performance.now()
+    const [{ taskId }, session] = await Promise.all([params, getServerSession()])
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const { taskId } = await params
     const searchParams = request.nextUrl.searchParams
     const rawFilename = searchParams.get('filename')
     const mode = searchParams.get('mode') || 'remote' // 'local' or 'remote'
+    const stream = searchParams.get('stream') === '1'
 
     if (!rawFilename) {
       return NextResponse.json({ error: 'Missing filename parameter' }, { status: 400 })
@@ -159,11 +161,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const filename = decodeURIComponent(rawFilename)
 
     // Get task from database and verify ownership (exclude soft-deleted)
-    const [task] = await db
+    const taskPromise = db
       .select()
       .from(tasks)
       .where(and(eq(tasks.id, taskId), eq(tasks.userId, session.user.id), isNull(tasks.deletedAt)))
       .limit(1)
+    const octokitPromise = getOctokit(session.user.id)
+    const [[task], octokit] = await Promise.all([taskPromise, octokitPromise])
 
     if (!task) {
       return NextResponse.json({ error: 'Task not found' }, { status: 404 })
@@ -174,7 +178,6 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     }
 
     // Get user's authenticated GitHub client
-    const octokit = await getOctokit()
     if (!octokit.auth) {
       return NextResponse.json(
         {
@@ -389,7 +392,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       }
 
       // Return file content with appropriate oldContent and newContent
-      return NextResponse.json({
+      const payload = {
         success: true,
         data: {
           filename,
@@ -400,7 +403,17 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
           isImage,
           isBase64,
         },
-      })
+      }
+
+      const durationMs = Math.round(performance.now() - requestStart)
+
+      if (stream) {
+        return createStreamResponse(payload, durationMs)
+      }
+
+      const response = NextResponse.json(payload)
+      response.headers.set('Server-Timing', `file-content;dur=${durationMs}`)
+      return response
     } catch (error: unknown) {
       console.error('Error fetching file content from GitHub:')
       return NextResponse.json({ error: 'Failed to fetch file content from GitHub' }, { status: 500 })
@@ -414,4 +427,21 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       { status: 500 },
     )
   }
+}
+
+function createStreamResponse(payload: unknown, durationMs: number) {
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(JSON.stringify({ type: 'data', payload }) + '\n'))
+      controller.close()
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Server-Timing': `file-content;dur=${durationMs}`,
+    },
+  })
 }

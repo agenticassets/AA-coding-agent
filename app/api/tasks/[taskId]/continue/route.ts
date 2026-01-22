@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse, after } from 'next/server'
 import { getAuthFromRequest } from '@/lib/auth/api-token'
-import { getServerSession } from '@/lib/session/get-server-session'
 import { db } from '@/lib/db/client'
 import { tasks, taskMessages, connectors } from '@/lib/db/schema'
 import { eq, and, asc, isNull } from 'drizzle-orm'
@@ -28,8 +27,12 @@ export async function POST(req: NextRequest, context: { params: Promise<{ taskId
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
+    const paramsPromise = context.params
+    const rateLimitPromise = checkRateLimit({ id: user.id, email: user.email ?? undefined })
+    const bodyPromise = req.json()
+
     // Check rate limit for follow-up messages
-    const rateLimit = await checkRateLimit({ id: user.id, email: user.email ?? undefined })
+    const rateLimit = await rateLimitPromise
     if (!rateLimit.allowed) {
       return NextResponse.json(
         {
@@ -43,8 +46,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ taskId
       )
     }
 
-    const { taskId } = await context.params
-    const body = await req.json()
+    const [{ taskId }, body] = await Promise.all([paramsPromise, bodyPromise])
     const { message } = body
 
     if (!message || typeof message !== 'string' || !message.trim()) {
@@ -88,11 +90,12 @@ export async function POST(req: NextRequest, context: { params: Promise<{ taskId
 
     // Get user's API keys, GitHub token, and GitHub user info
     // Pass user.id directly to support both session-based and API token-based authentication
-    const userApiKeys = await getUserApiKeys(user.id)
-    const userGithubToken = await getUserGitHubToken(user.id)
-    const githubUser = await getGitHubUser(user.id)
-    // Get max sandbox duration for this user (user-specific > global > env var)
-    const maxSandboxDuration = await getMaxSandboxDuration(user.id)
+    const [userApiKeys, userGithubToken, githubUser, maxSandboxDuration] = await Promise.all([
+      getUserApiKeys(user.id),
+      getUserGitHubToken(user.id),
+      getGitHubUser(user.id),
+      getMaxSandboxDuration(user.id),
+    ])
 
     // Validate GitHub token if task requires repository access
     if (task.repoUrl) {
@@ -129,6 +132,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ taskId
         userApiKeys,
         userGithubToken,
         githubUser,
+        user.id,
       )
     })
 
@@ -161,6 +165,7 @@ async function continueTask(
     name: string | null
     email: string | null
   } | null,
+  userId?: string,
 ) {
   let sandbox: Sandbox | null = null
   let isResumedSandbox = false // Track if we reconnected to existing sandbox
@@ -325,13 +330,11 @@ async function continueTask(
     let mcpServers: Connector[] = []
 
     try {
-      const session = await getServerSession()
-
-      if (session?.user?.id) {
+      if (userId) {
         const userConnectors = await db
           .select()
           .from(connectors)
-          .where(and(eq(connectors.userId, session.user.id), eq(connectors.status, 'connected')))
+          .where(and(eq(connectors.userId, userId), eq(connectors.status, 'connected')))
 
         mcpServers = userConnectors.map((connector: Connector) => {
           const decryptedEnv = (() => {
@@ -354,7 +357,7 @@ async function continueTask(
           await logger.info('Found connected MCP servers')
         }
       }
-    } catch (mcpError) {
+    } catch {
       console.error('Failed to fetch MCP servers')
       await logger.info('Warning: Could not fetch MCP servers, continuing without them')
     }

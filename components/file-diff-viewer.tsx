@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo, useRef } from 'react'
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import { DiffView, DiffModeEnum } from '@git-diff-view/react'
 import { generateDiffFile } from '@git-diff-view/file'
@@ -53,6 +53,45 @@ export function FileDiffViewer({
   const [mounted, setMounted] = useState(false)
   // Internal cache for file contents (used for 'all' and 'all-local' modes)
   const internalCacheRef = useRef<Record<string, DiffData>>({})
+
+  const readFileResponse = useCallback(async (response: Response) => {
+    const contentType = response.headers.get('content-type') || ''
+    if (contentType.includes('application/x-ndjson') && response.body) {
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let payload: unknown | null = null
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) {
+          break
+        }
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+          const message = JSON.parse(line) as { type?: string; payload?: unknown; error?: string }
+          if (message.type === 'error') {
+            throw new Error(message.error || 'Failed to fetch file data')
+          }
+          if (message.type === 'data') {
+            payload = message.payload ?? null
+          }
+        }
+      }
+
+      if (!payload) {
+        throw new Error('Failed to read streamed response')
+      }
+
+      return payload
+    }
+
+    return response.json()
+  }, [])
 
   // Detect theme from parent window or system - only on client
   useEffect(() => {
@@ -133,21 +172,28 @@ export function FileDiffViewer({
         if (viewMode === 'local' || viewMode === 'all-local') {
           params.set('mode', 'local')
         }
+        if (viewMode === 'all' || viewMode === 'all-local') {
+          params.set('stream', '1')
+        }
         const response = await fetch(`${endpoint}?${params.toString()}`)
-        const result = await response.json()
+        const result = await readFileResponse(response)
 
-        if (!response.ok || !result.success) {
-          throw new Error(result.error || 'Failed to fetch file data')
+        if (!response.ok || !(result as { success?: boolean }).success) {
+          const errorMessage =
+            typeof result === 'object' && result && 'error' in result
+              ? String((result as { error?: string }).error || 'Failed to fetch file data')
+              : 'Failed to fetch file data'
+          throw new Error(errorMessage)
         }
 
         // Cache the result for files mode
         if (viewMode === 'all' || viewMode === 'all-local') {
-          internalCacheRef.current[selectedFile] = result.data
+          internalCacheRef.current[selectedFile] = (result as { data: DiffData }).data
         }
 
-        setDiffData(result.data)
+        setDiffData((result as { data: DiffData }).data)
       } catch (err) {
-        console.error('Error fetching file data:', err)
+        console.error('Error fetching file data')
         setError(err instanceof Error ? err.message : 'Failed to fetch file data')
       } finally {
         setLoading(false)
@@ -155,7 +201,7 @@ export function FileDiffViewer({
     }
 
     fetchDiffData()
-  }, [taskId, selectedFile, diffsCache, viewMode])
+  }, [taskId, selectedFile, diffsCache, viewMode, readFileResponse])
 
   // Call onFileLoaded when diffData is loaded
   useEffect(() => {
@@ -203,18 +249,13 @@ export function FileDiffViewer({
         file.buildSplitDiffLines()
         file.buildUnifiedDiffLines()
       } catch (initError) {
-        console.error('Error initializing diff file:', initError, {
-          filename: diffData.filename,
-          hasOldContent: !!diffData.oldContent,
-          hasNewContent: !!diffData.newContent,
-          viewMode,
-        })
+        console.error('Error initializing diff file')
         throw initError
       }
 
       return file
     } catch (error) {
-      console.error('Error generating diff file:', error)
+      console.error('Error generating diff file')
       return null
     }
   }, [diffData, mounted, theme, viewMode])
@@ -382,7 +423,7 @@ export function FileDiffViewer({
       </div>
     )
   } catch (error) {
-    console.error('Error rendering diff:', error)
+    console.error('Error rendering diff')
     return (
       <div className="flex items-center justify-center py-8 md:py-12 p-4">
         <div className="text-center">

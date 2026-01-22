@@ -15,12 +15,10 @@ import { detectPortFromRepo } from '@/lib/sandbox/port-detection'
 
 export async function POST(_request: NextRequest, { params }: { params: Promise<{ taskId: string }> }) {
   try {
-    const session = await getServerSession()
+    const [session, { taskId }] = await Promise.all([getServerSession(), params])
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
-
-    const { taskId } = await params
 
     // Get the task
     const [task] = await db.select().from(tasks).where(eq(tasks.id, taskId)).limit(1)
@@ -74,14 +72,14 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
     await logger.info('Starting sandbox')
 
     // Get GitHub user info for git author configuration
-    const githubUser = await getGitHubUser()
+    const [githubUser, maxSandboxDuration, githubToken] = await Promise.all([
+      getGitHubUser(session.user.id),
+      getMaxSandboxDuration(session.user.id),
+      getUserGitHubToken(session.user.id),
+    ])
 
     // Get max sandbox duration - use task's maxDuration if available, otherwise fall back to global setting
-    const maxSandboxDuration = await getMaxSandboxDuration(session.user.id)
     const maxDurationMinutes = task.maxDuration || maxSandboxDuration
-
-    // Get GitHub token for authenticated API access
-    const githubToken = await getUserGitHubToken()
 
     // Detect the appropriate port for the project
     const port = task.repoUrl ? await detectPortFromRepo(task.repoUrl, githubToken) : 3000
