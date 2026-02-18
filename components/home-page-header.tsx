@@ -63,13 +63,14 @@ export function HomePageHeader({
     setIsRefreshing(true)
     try {
       // Clear only owners cache
-      localStorage.removeItem('github-owners')
+      const STORAGE_VERSION = 'v1'
+      localStorage.removeItem(`app:${STORAGE_VERSION}:github-owners`)
       toast.success('Refreshing owners...')
 
       // Reload the page to fetch fresh data
       window.location.reload()
     } catch (error) {
-      console.error('Error refreshing owners:', error)
+      console.error('Error refreshing owners')
       toast.error('Failed to refresh owners')
     } finally {
       setIsRefreshing(false)
@@ -80,8 +81,10 @@ export function HomePageHeader({
     setIsRefreshing(true)
     try {
       // Clear repos cache for current owner
+      const STORAGE_VERSION = 'v1'
+      const reposCachePrefix = `app:${STORAGE_VERSION}:github-repos-`
       if (selectedOwner) {
-        localStorage.removeItem(`github-repos-${selectedOwner}`)
+        localStorage.removeItem(`${reposCachePrefix}${selectedOwner}`)
         toast.success('Refreshing repositories...')
 
         // Reload the page to fetch fresh data
@@ -89,7 +92,7 @@ export function HomePageHeader({
       } else {
         // Clear all repos if no owner selected
         Object.keys(localStorage).forEach((key) => {
-          if (key.startsWith('github-repos-')) {
+          if (key.startsWith(reposCachePrefix)) {
             localStorage.removeItem(key)
           }
         })
@@ -97,7 +100,7 @@ export function HomePageHeader({
         window.location.reload()
       }
     } catch (error) {
-      console.error('Error refreshing repositories:', error)
+      console.error('Error refreshing repositories')
       toast.error('Failed to refresh repositories')
     } finally {
       setIsRefreshing(false)
@@ -272,8 +275,14 @@ export function HomePageHeader({
           )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-8 w-8 p-0 flex-shrink-0" title="More options">
-                <MoreHorizontal className="h-4 w-4" />
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0 flex-shrink-0"
+                title="More options"
+                aria-label="More options"
+              >
+                <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">

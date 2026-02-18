@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useTasks } from '@/components/app-layout'
 import { useRouter } from 'next/navigation'
+import Image from 'next/image'
 import { toast } from 'sonner'
 import { RevertCommitDialog } from '@/components/revert-commit-dialog'
 
@@ -142,7 +143,7 @@ export function RepoCommits({ owner, repo }: RepoCommitsProps) {
       <div className="flex items-center justify-center h-64">
         <div className="text-center">
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-current border-r-transparent align-[-0.125em] motion-reduce:animate-[spin_1.5s_linear_infinite]" />
-          <p className="mt-2 text-sm text-muted-foreground">Loading commits...</p>
+          <p className="mt-2 text-sm text-muted-foreground">Loading commits\u2026</p>
         </div>
       </div>
     )
@@ -178,10 +179,13 @@ export function RepoCommits({ owner, repo }: RepoCommitsProps) {
           <Card key={commit.sha} className="p-4 hover:bg-muted/50 transition-colors">
             <div className="flex items-start gap-3">
               {commit.author?.avatar_url ? (
-                <img
+                <Image
                   src={commit.author.avatar_url}
                   alt={commit.author.login}
+                  width={40}
+                  height={40}
                   className="h-10 w-10 rounded-full flex-shrink-0"
+                  unoptimized
                 />
               ) : (
                 <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center flex-shrink-0">

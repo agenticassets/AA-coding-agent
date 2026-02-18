@@ -1,6 +1,6 @@
 'use client'
 
-import { Task, Connector } from '@/lib/db/schema'
+import type { Task, Connector } from '@/lib/db/schema'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -35,6 +35,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { toast } from 'sonner'
+import dynamic from 'next/dynamic'
 import { Claude, Codex, Copilot, Cursor, Gemini, OpenCode } from '@/components/logos'
 import { useTasks } from '@/components/app-layout'
 import {
@@ -47,11 +48,23 @@ import {
   getShowChatPane,
   setShowChatPane as saveShowChatPane,
 } from '@/lib/utils/cookies'
-import { FileBrowser } from '@/components/file-browser'
-import { FileDiffViewer } from '@/components/file-diff-viewer'
-import { CreatePRDialog } from '@/components/create-pr-dialog'
-import { MergePRDialog } from '@/components/merge-pr-dialog'
-import { TaskChat } from '@/components/task-chat'
+
+// Dynamically import heavy components to reduce initial bundle size
+// FileBrowser: 1,879 lines - loaded when files pane is visible
+const FileBrowser = dynamic(() => import('@/components/file-browser').then((mod) => mod.FileBrowser), { ssr: false })
+// FileDiffViewer: 410 lines + @git-diff-view library - loaded when diff tab is active
+const FileDiffViewer = dynamic(() => import('@/components/file-diff-viewer').then((mod) => mod.FileDiffViewer), {
+  ssr: false,
+})
+// CreatePRDialog/MergePRDialog: only shown when user clicks PR actions
+const CreatePRDialog = dynamic(() => import('@/components/create-pr-dialog').then((mod) => mod.CreatePRDialog), {
+  ssr: false,
+})
+const MergePRDialog = dynamic(() => import('@/components/merge-pr-dialog').then((mod) => mod.MergePRDialog), {
+  ssr: false,
+})
+// TaskChat: 1,258 lines + streamdown - loaded when chat pane is visible
+const TaskChat = dynamic(() => import('@/components/task-chat').then((mod) => mod.TaskChat), { ssr: false })
 import {
   AlertDialog,
   AlertDialogAction,
@@ -168,10 +181,38 @@ const DEFAULT_MODELS = {
   opencode: 'gpt-5',
 } as const
 
+// Hoisted default state objects to avoid re-creation on every render
+// Per vercel-react-best-practices: rerender-memo-with-default-value
+const INITIAL_OPEN_TABS_BY_MODE = {
+  local: [] as string[],
+  remote: [] as string[],
+  all: [] as string[],
+  'all-local': [] as string[],
+}
+const INITIAL_ACTIVE_TAB_INDEX_BY_MODE = {
+  local: 0,
+  remote: 0,
+  all: 0,
+  'all-local': 0,
+}
+const INITIAL_SELECTED_FILE_BY_MODE = {
+  local: undefined as string | undefined,
+  remote: undefined as string | undefined,
+  all: undefined as string | undefined,
+  'all-local': undefined as string | undefined,
+}
+const INITIAL_SELECTED_ITEM_IS_FOLDER_BY_MODE = {
+  local: false,
+  remote: false,
+  all: false,
+  'all-local': false,
+}
+
 export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps) {
   const [optimisticStatus, setOptimisticStatus] = useState<Task['status'] | null>(null)
   const [mcpServers, setMcpServers] = useState<Connector[]>([])
   const [loadingMcpServers, setLoadingMcpServers] = useState(false)
+  const previousMcpServerIdsRef = useRef<string[] | null>(null)
   const [diffsCache, setDiffsCache] = useState<Record<string, DiffData>>({})
   const loadingDiffsRef = useRef(false)
   const [refreshKey, setRefreshKey] = useState(0)
@@ -250,50 +291,10 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
   const router = useRouter()
 
   // Tabs state for Code pane - each mode has its own tabs and selection
-  const [openTabsByMode, setOpenTabsByMode] = useState<{
-    local: string[]
-    remote: string[]
-    all: string[]
-    'all-local': string[]
-  }>({
-    local: [],
-    remote: [],
-    all: [],
-    'all-local': [],
-  })
-  const [activeTabIndexByMode, setActiveTabIndexByMode] = useState<{
-    local: number
-    remote: number
-    all: number
-    'all-local': number
-  }>({
-    local: 0,
-    remote: 0,
-    all: 0,
-    'all-local': 0,
-  })
-  const [selectedFileByMode, setSelectedFileByMode] = useState<{
-    local: string | undefined
-    remote: string | undefined
-    all: string | undefined
-    'all-local': string | undefined
-  }>({
-    local: undefined,
-    remote: undefined,
-    all: undefined,
-    'all-local': undefined,
-  })
-  const [selectedItemIsFolderByMode, setSelectedItemIsFolderByMode] = useState<{
-    local: boolean
-    remote: boolean
-    all: boolean
-    'all-local': boolean
-  }>({
-    local: false,
-    remote: false,
-    all: false,
-    'all-local': false,
-  })
+  const [openTabsByMode, setOpenTabsByMode] = useState(INITIAL_OPEN_TABS_BY_MODE)
+  const [activeTabIndexByMode, setActiveTabIndexByMode] = useState(INITIAL_ACTIVE_TAB_INDEX_BY_MODE)
+  const [selectedFileByMode, setSelectedFileByMode] = useState(INITIAL_SELECTED_FILE_BY_MODE)
+  const [selectedItemIsFolderByMode, setSelectedItemIsFolderByMode] = useState(INITIAL_SELECTED_ITEM_IS_FOLDER_BY_MODE)
   const [tabsWithUnsavedChanges, setTabsWithUnsavedChanges] = useState<Set<string>>(new Set())
   const [tabsSaving, setTabsSaving] = useState<Set<string>>(new Set())
   const [showCloseTabDialog, setShowCloseTabDialog] = useState(false)
@@ -331,102 +332,119 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
   }, [])
 
   // Tab management functions
-  const openFileInTab = async (file: string, isFolder?: boolean) => {
-    // If it's a folder, just update the selected file state (for creating files/folders in that location)
-    if (isFolder) {
-      setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: file }))
-      setSelectedItemIsFolderByMode((prev) => ({ ...prev, [viewMode]: true }))
-      return
-    }
+  const openFileInTab = useCallback(
+    async (file: string, isFolder?: boolean) => {
+      // If it's a folder, just update the selected file state (for creating files/folders in that location)
+      if (isFolder) {
+        setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: file }))
+        setSelectedItemIsFolderByMode((prev) => ({ ...prev, [viewMode]: true }))
+        return
+      }
 
-    // Mark as not a folder
-    setSelectedItemIsFolderByMode((prev) => ({ ...prev, [viewMode]: false }))
+      // Mark as not a folder
+      setSelectedItemIsFolderByMode((prev) => ({ ...prev, [viewMode]: false }))
 
-    const currentTabs = openTabsByMode[viewMode]
-    const existingIndex = currentTabs.indexOf(file)
+      const currentTabs = openTabsByMode[viewMode]
+      const existingIndex = currentTabs.indexOf(file)
 
-    // For Changes mode (local or remote), only show one file at a time (no tabs)
-    const isChangesMode = viewMode === 'local' || viewMode === 'remote'
+      // For Changes mode (local or remote), only show one file at a time (no tabs)
+      const isChangesMode = viewMode === 'local' || viewMode === 'remote'
 
-    // Check if file is already loaded and has changed
-    if (existingIndex !== -1 && loadedFileHashes[file]) {
-      try {
-        const params = new URLSearchParams()
-        params.set('filename', file)
+      // Check if file is already loaded and has changed
+      if (existingIndex !== -1 && loadedFileHashes[file]) {
+        try {
+          const params = new URLSearchParams()
+          params.set('filename', file)
 
-        const endpoint =
-          viewMode === 'all' || viewMode === 'all-local'
-            ? `/api/tasks/${task.id}/file-content`
-            : `/api/tasks/${task.id}/diff`
+          const endpoint =
+            viewMode === 'all' || viewMode === 'all-local'
+              ? `/api/tasks/${task.id}/file-content`
+              : `/api/tasks/${task.id}/diff`
 
-        if (viewMode === 'local' || viewMode === 'all-local') {
-          params.set('mode', 'local')
-        }
+          if (viewMode === 'local' || viewMode === 'all-local') {
+            params.set('mode', 'local')
+          }
 
-        const response = await fetch(`${endpoint}?${params.toString()}`)
-        const result = await response.json()
+          const response = await fetch(`${endpoint}?${params.toString()}`)
+          const result = await response.json()
 
-        if (result.success && result.data) {
-          // Create a simple hash of the content
-          const newContent = result.data.newContent || result.data.oldContent || ''
-          const newHash = `${newContent.length}-${newContent.substring(0, 100)}`
+          if (result.success && result.data) {
+            // Create a simple hash of the content
+            const newContent = result.data.newContent || result.data.oldContent || ''
+            const newHash = `${newContent.length}-${newContent.substring(0, 100)}`
 
-          if (loadedFileHashes[file] !== newHash) {
-            // Content has changed, show toast
-            toast.info(`File "${file}" has been updated`, {
-              description: 'The file has new changes. Would you like to reload it?',
-              duration: 10000,
-              action: {
-                label: 'Load Latest',
-                onClick: () => {
-                  // Update hash and force reload by changing selection
-                  setLoadedFileHashes((prev) => ({ ...prev, [file]: newHash }))
-                  // Force reload by briefly deselecting then reselecting
-                  setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: undefined }))
-                  setTimeout(() => {
+            if (loadedFileHashes[file] !== newHash) {
+              // Content has changed, show toast
+              toast.info(`File "${file}" has been updated`, {
+                description: 'The file has new changes. Would you like to reload it?',
+                duration: 10000,
+                action: {
+                  label: 'Load Latest',
+                  onClick: () => {
+                    // Update hash and force reload by changing selection
+                    setLoadedFileHashes((prev) => ({ ...prev, [file]: newHash }))
+                    // Force reload by briefly deselecting then reselecting
+                    setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: undefined }))
+                    setTimeout(() => {
+                      setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: existingIndex }))
+                      setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: file }))
+                    }, 10)
+                  },
+                },
+                cancel: {
+                  label: 'Ignore',
+                  onClick: () => {
+                    // Just switch to the tab without reloading
                     setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: existingIndex }))
                     setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: file }))
-                  }, 10)
+                  },
                 },
-              },
-              cancel: {
-                label: 'Ignore',
-                onClick: () => {
-                  // Just switch to the tab without reloading
-                  setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: existingIndex }))
-                  setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: file }))
-                },
-              },
-            })
-            return
+              })
+              return
+            }
           }
+        } catch (err) {
+          console.error('Error checking for file changes:', err)
+          // Continue with normal flow on error
         }
-      } catch (err) {
-        console.error('Error checking for file changes:', err)
-        // Continue with normal flow on error
       }
-    }
 
-    if (isChangesMode) {
-      // Replace the current file (only one file at a time)
-      setOpenTabsByMode((prev) => ({ ...prev, [viewMode]: [file] }))
-      setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: 0 }))
-      setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: file }))
-    } else {
-      // Files mode: use tabs
-      if (existingIndex !== -1) {
-        // File already open in this mode, just switch to it
-        setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: existingIndex }))
+      if (isChangesMode) {
+        // Replace the current file (only one file at a time)
+        setOpenTabsByMode((prev) => ({ ...prev, [viewMode]: [file] }))
+        setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: 0 }))
         setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: file }))
       } else {
-        // Open new tab in current mode
-        const newTabs = [...currentTabs, file]
-        setOpenTabsByMode((prev) => ({ ...prev, [viewMode]: newTabs }))
-        setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: newTabs.length - 1 }))
-        setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: file }))
+        // Files mode: use tabs
+        if (existingIndex !== -1) {
+          // File already open in this mode, just switch to it
+          setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: existingIndex }))
+          setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: file }))
+        } else {
+          // Open new tab in current mode
+          const newTabs = [...currentTabs, file]
+          setOpenTabsByMode((prev) => ({ ...prev, [viewMode]: newTabs }))
+          setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: newTabs.length - 1 }))
+          setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: file }))
+        }
       }
-    }
-  }
+    },
+    [loadedFileHashes, openTabsByMode, task.id, viewMode],
+  )
+
+  const openFileInTabRef = useRef(openFileInTab)
+
+  useEffect(() => {
+    openFileInTabRef.current = openFileInTab
+  }, [openFileInTab])
+
+  const handleFileSelect = useCallback((file: string, isFolder?: boolean) => {
+    void openFileInTabRef.current(file, isFolder)
+  }, [])
+
+  const handleEditorOpenFile = useCallback((filename: string, _lineNumber?: number) => {
+    void openFileInTabRef.current(filename)
+  }, [])
 
   const handleUnsavedChanges = useCallback((filename: string, hasChanges: boolean) => {
     setTabsWithUnsavedChanges((prev) => {
@@ -452,6 +470,24 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
     })
   }, [])
 
+  const handleSelectedFileUnsavedChanges = useCallback(
+    (hasChanges: boolean) => {
+      if (selectedFile) {
+        handleUnsavedChanges(selectedFile, hasChanges)
+      }
+    },
+    [handleUnsavedChanges, selectedFile],
+  )
+
+  const handleSelectedFileSavingStateChange = useCallback(
+    (isSaving: boolean) => {
+      if (selectedFile) {
+        handleSavingStateChange(selectedFile, isSaving)
+      }
+    },
+    [handleSavingStateChange, selectedFile],
+  )
+
   const handleSaveSuccess = useCallback(() => {
     // When a file is saved in 'all-local' mode, refresh the file browser
     // to update file status (show modified files in yellow)
@@ -466,55 +502,60 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
     setLoadedFileHashes((prev) => ({ ...prev, [filename]: hash }))
   }, [])
 
-  const attemptCloseTab = (index: number, e?: React.MouseEvent) => {
-    e?.stopPropagation()
-    const currentTabs = openTabsByMode[viewMode]
-    const fileToClose = currentTabs[index]
+  const closeTab = useCallback(
+    (index: number) => {
+      const currentTabs = openTabs
+      const currentActiveIndex = activeTabIndex
+      const fileToClose = currentTabs[index]
+      const newTabs = currentTabs.filter((_, i) => i !== index)
 
-    // Check if the tab has unsaved changes
-    if (tabsWithUnsavedChanges.has(fileToClose)) {
-      setTabToClose(index)
-      setShowCloseTabDialog(true)
-    } else {
-      closeTab(index)
-    }
-  }
+      setOpenTabsByMode((prev) => ({ ...prev, [viewMode]: newTabs }))
 
-  const closeTab = (index: number) => {
-    const currentTabs = openTabsByMode[viewMode]
-    const currentActiveIndex = activeTabIndexByMode[viewMode]
-    const fileToClose = currentTabs[index]
-    const newTabs = currentTabs.filter((_, i) => i !== index)
+      // Remove from unsaved changes
+      setTabsWithUnsavedChanges((prev) => {
+        const newSet = new Set(prev)
+        newSet.delete(fileToClose)
+        return newSet
+      })
 
-    setOpenTabsByMode((prev) => ({ ...prev, [viewMode]: newTabs }))
+      // Adjust active tab index
+      if (newTabs.length === 0) {
+        setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: 0 }))
+        setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: undefined }))
+        setSelectedItemIsFolderByMode((prev) => ({ ...prev, [viewMode]: false }))
+      } else if (currentActiveIndex >= newTabs.length) {
+        setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: newTabs.length - 1 }))
+        setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: newTabs[newTabs.length - 1] }))
+        setSelectedItemIsFolderByMode((prev) => ({ ...prev, [viewMode]: false }))
+      } else if (currentActiveIndex === index) {
+        // If closing the active tab, switch to the previous tab (or next if it's the first)
+        const newIndex = Math.max(0, index - 1)
+        setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: newIndex }))
+        setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: newTabs[newIndex] }))
+        setSelectedItemIsFolderByMode((prev) => ({ ...prev, [viewMode]: false }))
+      } else if (currentActiveIndex > index) {
+        // Adjust index if a tab before the active one was closed
+        setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: currentActiveIndex - 1 }))
+      }
+    },
+    [activeTabIndex, openTabs, viewMode],
+  )
 
-    // Remove from unsaved changes
-    setTabsWithUnsavedChanges((prev) => {
-      const newSet = new Set(prev)
-      newSet.delete(fileToClose)
-      return newSet
-    })
+  const attemptCloseTab = useCallback(
+    (index: number, e?: React.MouseEvent) => {
+      e?.stopPropagation()
+      const fileToClose = openTabs[index]
 
-    // Adjust active tab index
-    if (newTabs.length === 0) {
-      setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: 0 }))
-      setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: undefined }))
-      setSelectedItemIsFolderByMode((prev) => ({ ...prev, [viewMode]: false }))
-    } else if (currentActiveIndex >= newTabs.length) {
-      setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: newTabs.length - 1 }))
-      setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: newTabs[newTabs.length - 1] }))
-      setSelectedItemIsFolderByMode((prev) => ({ ...prev, [viewMode]: false }))
-    } else if (currentActiveIndex === index) {
-      // If closing the active tab, switch to the previous tab (or next if it's the first)
-      const newIndex = Math.max(0, index - 1)
-      setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: newIndex }))
-      setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: newTabs[newIndex] }))
-      setSelectedItemIsFolderByMode((prev) => ({ ...prev, [viewMode]: false }))
-    } else if (currentActiveIndex > index) {
-      // Adjust index if a tab before the active one was closed
-      setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: currentActiveIndex - 1 }))
-    }
-  }
+      // Check if the tab has unsaved changes
+      if (tabsWithUnsavedChanges.has(fileToClose)) {
+        setTabToClose(index)
+        setShowCloseTabDialog(true)
+      } else {
+        closeTab(index)
+      }
+    },
+    [closeTab, openTabs, tabsWithUnsavedChanges],
+  )
 
   const handleCloseTabConfirm = (save: boolean) => {
     if (tabToClose === null) return
@@ -540,12 +581,14 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
     }
   }
 
-  const switchToTab = (index: number) => {
-    const currentTabs = openTabsByMode[viewMode]
-    setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: index }))
-    setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: currentTabs[index] }))
-    setSelectedItemIsFolderByMode((prev) => ({ ...prev, [viewMode]: false }))
-  }
+  const switchToTab = useCallback(
+    (index: number) => {
+      setActiveTabIndexByMode((prev) => ({ ...prev, [viewMode]: index }))
+      setSelectedFileByMode((prev) => ({ ...prev, [viewMode]: openTabs[index] }))
+      setSelectedItemIsFolderByMode((prev) => ({ ...prev, [viewMode]: false }))
+    },
+    [openTabs, viewMode],
+  )
 
   // Use optimistic status if available, otherwise use actual task status
   const currentStatus = optimisticStatus || task.status
@@ -592,7 +635,7 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
     }, 60000) // 60 seconds
 
     return () => clearInterval(interval)
-  }, [currentStatus, task.keepAlive, task.createdAt])
+  }, [currentStatus, task.keepAlive, task.createdAt, task.maxDuration])
 
   // Periodic sandbox health check
   useEffect(() => {
@@ -678,58 +721,12 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
     }
   }
 
-  // Model mappings for all agents
-  const AGENT_MODELS: Record<string, Array<{ value: string; label: string }>> = {
-    claude: [
-      { value: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
-      { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
-      { value: 'claude-opus-4-1-20250805', label: 'Opus 4.1' },
-      { value: 'claude-sonnet-4-20250514', label: 'Sonnet 4' },
-    ],
-    codex: [
-      { value: 'openai/gpt-5', label: 'GPT-5' },
-      { value: 'gpt-5-codex', label: 'GPT-5-Codex' },
-      { value: 'openai/gpt-5-mini', label: 'GPT-5 mini' },
-      { value: 'openai/gpt-5-nano', label: 'GPT-5 nano' },
-      { value: 'gpt-5-pro', label: 'GPT-5 pro' },
-      { value: 'openai/gpt-4.1', label: 'GPT-4.1' },
-    ],
-    copilot: [
-      { value: 'claude-sonnet-4.5', label: 'Sonnet 4.5' },
-      { value: 'claude-sonnet-4', label: 'Sonnet 4' },
-      { value: 'claude-haiku-4.5', label: 'Haiku 4.5' },
-      { value: 'gpt-5', label: 'GPT-5' },
-    ],
-    cursor: [
-      { value: 'auto', label: 'Auto' },
-      { value: 'sonnet-4.5', label: 'Sonnet 4.5' },
-      { value: 'sonnet-4.5-thinking', label: 'Sonnet 4.5 Thinking' },
-      { value: 'gpt-5', label: 'GPT-5' },
-      { value: 'gpt-5-codex', label: 'GPT-5 Codex' },
-      { value: 'opus-4.1', label: 'Opus 4.1' },
-      { value: 'grok', label: 'Grok' },
-    ],
-    gemini: [
-      { value: 'gemini-3-pro-preview', label: 'Gemini 3 Pro Preview' },
-      { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-      { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-    ],
-    opencode: [
-      { value: 'gpt-5', label: 'GPT-5' },
-      { value: 'gpt-5-mini', label: 'GPT-5 mini' },
-      { value: 'gpt-5-nano', label: 'GPT-5 nano' },
-      { value: 'gpt-4.1', label: 'GPT-4.1' },
-      { value: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
-      { value: 'claude-sonnet-4-20250514', label: 'Sonnet 4' },
-      { value: 'claude-opus-4-1-20250805', label: 'Opus 4.1' },
-    ],
-  }
-
   // Get readable model name
   const getModelName = (modelId: string | null, agent: string | null) => {
     if (!modelId || !agent) return modelId
 
-    const agentModels = AGENT_MODELS[agent.toLowerCase()]
+    const agentKey = agent.toLowerCase() as keyof typeof AGENT_MODELS
+    const agentModels = AGENT_MODELS[agentKey]
     if (!agentModels) return modelId
 
     const model = agentModels.find((m) => m.value === modelId)
@@ -776,12 +773,24 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
   }
 
   // Fetch MCP servers if task has mcpServerIds (only when IDs actually change)
+  // Use ref to detect actual changes rather than JSON.stringify to avoid recreating strings
   useEffect(() => {
     async function fetchMcpServers() {
       if (!task.mcpServerIds || task.mcpServerIds.length === 0) {
         return
       }
 
+      // Check if IDs have actually changed by comparing arrays
+      const idsHaveChanged =
+        !previousMcpServerIdsRef.current ||
+        previousMcpServerIdsRef.current.length !== task.mcpServerIds.length ||
+        !previousMcpServerIdsRef.current.every((id, index) => id === task.mcpServerIds![index])
+
+      if (!idsHaveChanged) {
+        return
+      }
+
+      previousMcpServerIdsRef.current = [...task.mcpServerIds]
       setLoadingMcpServers(true)
 
       try {
@@ -799,9 +808,7 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
     }
 
     fetchMcpServers()
-    // Use JSON.stringify to create stable dependency - only re-run when IDs actually change
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(task.mcpServerIds)])
+  }, [task.mcpServerIds])
 
   // Fetch deployment info when task is completed and has a branch (only if not already cached)
   useEffect(() => {
@@ -1051,7 +1058,7 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [openTabs, activeTabIndex])
+  }, [activeTabIndex, attemptCloseTab, openTabs, switchToTab])
 
   // Trigger refresh when task completes
   useEffect(() => {
@@ -1724,7 +1731,7 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
                 taskId={task.id}
                 branchName={task.branchName}
                 repoUrl={task.repoUrl}
-                onFileSelect={openFileInTab}
+                onFileSelect={handleFileSelect}
                 onFilesLoaded={fetchAllDiffs}
                 selectedFile={selectedFile}
                 refreshKey={refreshKey}
@@ -1768,12 +1775,12 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
                               <span
                                 onClick={(e) => attemptCloseTab(index, e)}
                                 className={cn(
-                                  'flex items-center justify-center w-4 h-4 rounded transition-all cursor-pointer hover:bg-accent flex-shrink-0',
+                                  'flex items-center justify-center w-4 h-4 rounded transition-opacity cursor-pointer hover:bg-accent flex-shrink-0',
                                   hasUnsavedChanges || isSaving ? '' : 'opacity-0 group-hover:opacity-100',
                                 )}
                                 title={
                                   isSaving
-                                    ? 'Saving...'
+                                    ? 'Saving\u2026'
                                     : hasUnsavedChanges
                                       ? 'Unsaved changes • Click to close'
                                       : 'Close tab'
@@ -1815,7 +1822,7 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
                           setShowFileDropdown(true)
                         }}
                         onFocus={() => setShowFileDropdown(true)}
-                        placeholder="Type to search files..."
+                        placeholder="Type to search files\u2026"
                         className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
                       />
 
@@ -1860,16 +1867,9 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
                       isInitialLoading={Object.keys(diffsCache).length === 0}
                       viewMode={viewMode}
                       taskId={task.id}
-                      onUnsavedChanges={
-                        selectedFile ? (hasChanges) => handleUnsavedChanges(selectedFile, hasChanges) : undefined
-                      }
-                      onSavingStateChange={
-                        selectedFile ? (isSaving) => handleSavingStateChange(selectedFile, isSaving) : undefined
-                      }
-                      onOpenFile={(filename, lineNumber) => {
-                        openFileInTab(filename)
-                        // TODO: Optionally scroll to lineNumber after opening
-                      }}
+                      onUnsavedChanges={handleSelectedFileUnsavedChanges}
+                      onSavingStateChange={handleSelectedFileSavingStateChange}
+                      onOpenFile={handleEditorOpenFile}
                       onSaveSuccess={handleSaveSuccess}
                       onFileLoaded={handleFileLoaded}
                     />
@@ -1900,7 +1900,7 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
                         {sandboxHealth === 'stopped'
                           ? 'Sandbox stopped'
                           : currentStatus === 'pending' || currentStatus === 'processing'
-                            ? 'Creating sandbox...'
+                            ? 'Creating sandbox\u2026'
                             : 'Sandbox not running'}
                       </span>
                     )}
@@ -2085,16 +2085,9 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
                       isInitialLoading={Object.keys(diffsCache).length === 0}
                       viewMode={viewMode}
                       taskId={task.id}
-                      onUnsavedChanges={
-                        selectedFile ? (hasChanges) => handleUnsavedChanges(selectedFile, hasChanges) : undefined
-                      }
-                      onSavingStateChange={
-                        selectedFile ? (isSaving) => handleSavingStateChange(selectedFile, isSaving) : undefined
-                      }
-                      onOpenFile={(filename, lineNumber) => {
-                        openFileInTab(filename)
-                        // TODO: Optionally scroll to lineNumber after opening
-                      }}
+                      onUnsavedChanges={handleSelectedFileUnsavedChanges}
+                      onSavingStateChange={handleSelectedFileSavingStateChange}
+                      onOpenFile={handleEditorOpenFile}
                       onFileLoaded={handleFileLoaded}
                       onSaveSuccess={handleSaveSuccess}
                     />
@@ -2132,7 +2125,7 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
                     ) : (
                       <span className="text-sm text-muted-foreground truncate flex-1">
                         {currentStatus === 'pending' || currentStatus === 'processing'
-                          ? 'Creating sandbox...'
+                          ? 'Creating sandbox\u2026'
                           : 'Sandbox not running'}
                       </span>
                     )}
@@ -2515,7 +2508,7 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleTryAgain} disabled={isTryingAgain}>
-              {isTryingAgain ? 'Creating...' : 'Create Task'}
+              {isTryingAgain ? 'Creating\u2026' : 'Create Task'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -2533,7 +2526,7 @@ export function TaskDetails({ task, maxSandboxDuration = 300 }: TaskDetailsProps
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleDelete} disabled={isDeleting} className="bg-red-600 hover:bg-red-700">
-              {isDeleting ? 'Deleting...' : 'Delete'}
+              {isDeleting ? 'Deleting\u2026' : 'Delete'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

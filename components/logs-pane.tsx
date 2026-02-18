@@ -1,6 +1,6 @@
 'use client'
 
-import { Task, LogEntry } from '@/lib/db/schema'
+import type { Task, LogEntry } from '@/lib/db/schema'
 import { Button } from '@/components/ui/button'
 import { Copy, Check, ChevronDown, ChevronUp, Trash2, Bot } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -12,6 +12,7 @@ import { Terminal, TerminalRef } from '@/components/terminal'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SubAgentIndicatorCompact } from '@/components/sub-agent-indicator'
 import { Badge } from '@/components/ui/badge'
+import { useWindowResize } from '@/lib/hooks/use-window-resize'
 
 interface LogsPaneProps {
   task: Task
@@ -39,21 +40,16 @@ export function LogsPane({ task, onHeightChange }: LogsPaneProps) {
   const wasAtBottomRef = useRef<boolean>(true)
   const { isSidebarOpen, isSidebarResizing, refreshTasks } = useTasks()
 
-  // Check if we're on desktop
+  // Check if we're on desktop using centralized resize hook
+  useWindowResize(1024, () => {
+    setIsDesktop(window.innerWidth >= 1024)
+  })
+
+  // Delay enabling transitions until after the browser has painted the correct position
   useEffect(() => {
-    const checkDesktop = () => {
-      setIsDesktop(window.innerWidth >= 1024)
-    }
-
-    checkDesktop()
-
-    // Delay enabling transitions until after the browser has painted the correct position
     requestAnimationFrame(() => {
       setHasMounted(true)
     })
-
-    window.addEventListener('resize', checkDesktop)
-    return () => window.removeEventListener('resize', checkDesktop)
   }, [])
 
   // Initialize height and collapsed state from cookies on mount
@@ -128,7 +124,7 @@ export function LogsPane({ task, onHeightChange }: LogsPaneProps) {
       wasAtBottomRef.current = isAtBottom
     }
 
-    logsContainer.addEventListener('scroll', handleScroll)
+    logsContainer.addEventListener('scroll', handleScroll, { passive: true })
     return () => logsContainer.removeEventListener('scroll', handleScroll)
   }, [])
 
@@ -319,6 +315,7 @@ export function LogsPane({ task, onHeightChange }: LogsPaneProps) {
                 onClick={clearLogs}
                 disabled={isClearingLogs}
                 className="h-5 w-5 p-0 hover:bg-accent"
+                aria-label="Clear logs"
                 title="Clear logs"
               >
                 <Trash2 className="h-3 w-3" />
@@ -328,6 +325,7 @@ export function LogsPane({ task, onHeightChange }: LogsPaneProps) {
                 size="sm"
                 onClick={copyLogsToClipboard}
                 className="h-5 w-5 p-0 hover:bg-accent"
+                aria-label="Copy logs to clipboard"
                 title="Copy logs to clipboard"
               >
                 {copiedLogs ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
@@ -341,6 +339,7 @@ export function LogsPane({ task, onHeightChange }: LogsPaneProps) {
                 size="sm"
                 onClick={clearTerminal}
                 className="h-5 w-5 p-0 hover:bg-accent"
+                aria-label="Clear terminal"
                 title="Clear terminal"
               >
                 <Trash2 className="h-3 w-3" />
@@ -350,6 +349,7 @@ export function LogsPane({ task, onHeightChange }: LogsPaneProps) {
                 size="sm"
                 onClick={copyTerminalToClipboard}
                 className="h-5 w-5 p-0 hover:bg-accent"
+                aria-label="Copy terminal to clipboard"
                 title="Copy terminal to clipboard"
               >
                 {copiedTerminal ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
@@ -402,6 +402,10 @@ export function LogsPane({ task, onHeightChange }: LogsPaneProps) {
                   'flex gap-1.5 leading-tight',
                   isSubAgentLog && 'bg-violet-500/5 -mx-2 px-2 py-0.5 border-l-2 border-violet-500/30',
                 )}
+                style={{
+                  contentVisibility: 'auto',
+                  containIntrinsicSize: '0 24px',
+                }}
               >
                 <span className="text-white/40 text-[10px] shrink-0">[{formatTime(log.timestamp || new Date())}]</span>
                 {/* Agent source badge */}
@@ -416,7 +420,7 @@ export function LogsPane({ task, onHeightChange }: LogsPaneProps) {
                     {log.agentSource.name}
                   </span>
                 )}
-                <span className={cn('flex-1', getLogColor(log.type))}>
+                <span className={cn('flex-1 break-words min-w-0', getLogColor(log.type))}>
                   {isServerLog && <span className="text-purple-400">[SERVER]</span>}
                   {isServerLog && ' '}
                   {messageContent}

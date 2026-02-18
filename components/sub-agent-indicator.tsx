@@ -1,6 +1,6 @@
 'use client'
 
-import { SubAgentActivity } from '@/lib/db/schema'
+import type { SubAgentActivity } from '@/lib/db/schema'
 import { cn } from '@/lib/utils'
 import { useState, useEffect } from 'react'
 import { Loader2, CheckCircle, XCircle, ChevronDown, ChevronUp, Bot, Zap, Clock } from 'lucide-react'
@@ -221,10 +221,16 @@ function SubAgentRow({ activity }: { activity: SubAgentActivity }) {
         config.borderColor,
       )}
     >
-      <div className="flex items-center gap-2">
-        <Icon className={cn('h-4 w-4', config.color, config.animate && 'animate-spin')} />
-        <div>
-          <div className="text-sm font-medium">{activity.name}</div>
+      <div className="flex items-center gap-2 min-w-0">
+        {config.animate ? (
+          <div className="animate-spin shrink-0">
+            <Icon className={cn('h-4 w-4', config.color)} />
+          </div>
+        ) : (
+          <Icon className={cn('h-4 w-4 shrink-0', config.color)} />
+        )}
+        <div className="min-w-0">
+          <div className="text-sm font-medium truncate">{activity.name}</div>
           {activity.description && (
             <div className="text-xs text-muted-foreground line-clamp-1">{activity.description}</div>
           )}
@@ -278,8 +284,14 @@ export function SubAgentIndicatorCompact({
             role="status"
             aria-label={`Sub-agent ${currentActivity.name} is running`}
           >
-            <Icon className={cn('h-3 w-3', config.color, config.animate && 'animate-spin')} />
-            <span className="font-medium">{currentActivity.name}</span>
+            {config.animate ? (
+              <div className="animate-spin">
+                <Icon className={cn('h-3 w-3', config.color)} />
+              </div>
+            ) : (
+              <Icon className={cn('h-3 w-3', config.color)} />
+            )}
+            <span className="font-medium truncate">{currentActivity.name}</span>
           </div>
         </TooltipTrigger>
         <TooltipContent>

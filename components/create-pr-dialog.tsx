@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -15,6 +15,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from 'sonner'
 import { Loader2 } from 'lucide-react'
+import { useWindowResize } from '@/lib/hooks/use-window-resize'
 
 interface CreatePRDialogProps {
   taskId: string
@@ -36,19 +37,10 @@ export function CreatePRDialog({
   const [title, setTitle] = useState(defaultTitle)
   const [body, setBody] = useState(defaultBody)
   const [isCreating, setIsCreating] = useState(false)
-  const [isMobile, setIsMobile] = useState(false)
 
-  useEffect(() => {
-    // Check if the device is mobile
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth < 768)
-    }
-
-    checkMobile()
-    window.addEventListener('resize', checkMobile)
-
-    return () => window.removeEventListener('resize', checkMobile)
-  }, [])
+  // Use centralized resize hook to detect mobile (breakpoint: 768px)
+  const { isDesktop } = useWindowResize(768)
+  const isMobile = !isDesktop
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -112,7 +104,7 @@ export function CreatePRDialog({
               <Label htmlFor="title">Title *</Label>
               <Input
                 id="title"
-                placeholder="Brief description of the changes"
+                placeholder="Brief description of the changes\u2026"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 disabled={isCreating}
@@ -123,7 +115,7 @@ export function CreatePRDialog({
               <Label htmlFor="body">Description</Label>
               <Textarea
                 id="body"
-                placeholder="Detailed description of the changes (optional)"
+                placeholder="Detailed description of the changes (optional)\u2026"
                 value={body}
                 onChange={(e) => setBody(e.target.value)}
                 disabled={isCreating}
@@ -138,7 +130,7 @@ export function CreatePRDialog({
           </Button>
           <Button type="submit" form="create-pr-form" disabled={isCreating || !title.trim()}>
             {isCreating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {isCreating ? 'Creating...' : 'Create Pull Request'}
+            {isCreating ? 'Creating\u2026' : 'Create Pull Request'}
           </Button>
         </DialogFooter>
       </DialogContent>

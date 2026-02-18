@@ -9,6 +9,8 @@ import { db } from '@/lib/db/client'
 import { eq } from 'drizzle-orm'
 import { generateId } from '@/lib/utils/id'
 
+const MAX_OUTPUT_SIZE_BYTES = 10 * 1024 * 1024 // 10MB output limit
+
 type Connector = typeof connectors.$inferSelect
 
 /**
@@ -199,8 +201,7 @@ MCPEOF`
           await logger.info('MCP config file created successfully')
           await logger.info('MCP servers configured successfully')
         } else {
-          const errorDetail = writeResult.error ? `: ${redactSensitiveInfo(writeResult.error).substring(0, 200)}` : ''
-          await logger.info('Failed to create MCP config file' + errorDetail)
+          await logger.info('Failed to create MCP config file')
         }
       }
 
@@ -239,8 +240,7 @@ MCPEOF`
           await logger.info('MCP config file created successfully')
           await logger.info('MCP servers configured successfully')
         } else {
-          const errorDetail = writeResult.error ? `: ${redactSensitiveInfo(writeResult.error).substring(0, 200)}` : ''
-          await logger.info('Failed to create MCP config file' + errorDetail)
+          await logger.info('Failed to create MCP config file')
         }
       }
 
@@ -292,6 +292,8 @@ export async function executeClaudeInSandbox(
   agentMessageId?: string,
 ): Promise<AgentExecutionResult> {
   let extractedSessionId: string | undefined
+  let totalOutputBytes = 0
+  let outputLimitReached = false
   try {
     // Executing Claude CLI with instruction
 
@@ -299,10 +301,11 @@ export async function executeClaudeInSandbox(
     const cliCheck = await runAndLogCommand(sandbox, 'which', ['claude'], logger)
 
     if (cliCheck.success) {
-      // Get Claude CLI version for debugging
-      await runAndLogCommand(sandbox, 'claude', ['--version'], logger)
-      // Also try to see what commands are available
-      await runAndLogCommand(sandbox, 'claude', ['--help'], logger)
+      // Get Claude CLI version and help info in parallel for debugging
+      await Promise.all([
+        runAndLogCommand(sandbox, 'claude', ['--version'], logger),
+        runAndLogCommand(sandbox, 'claude', ['--help'], logger),
+      ])
     }
 
     if (!cliCheck.success) {
@@ -420,6 +423,19 @@ export async function executeClaudeInSandbox(
         const text = chunk.toString()
         lastActivityTime = Date.now() // Update activity timestamp
 
+        // Track total output size
+        totalOutputBytes += Buffer.byteLength(text, 'utf8')
+        if (totalOutputBytes > MAX_OUTPUT_SIZE_BYTES && !outputLimitReached) {
+          outputLimitReached = true
+          console.log('[Output Limit] Exceeded', MAX_OUTPUT_SIZE_BYTES, 'bytes, stopping accumulation')
+        }
+
+        // Stop accumulating content if limit reached
+        if (outputLimitReached) {
+          callback()
+          return
+        }
+
         // Only accumulate raw output if not streaming to DB
         if (!agentMessageId || !taskId) {
           capturedOutput += text
@@ -477,7 +493,7 @@ export async function executeClaudeInSandbox(
                       statusMsg = `Grep: ${pattern}`
                     } else {
                       // For debugging, log the tool name and input to console
-                      console.log('Unknown Claude tool:', toolName, 'Input:', JSON.stringify(input))
+                      console.log('Unknown Claude tool detected')
                       // Skip logging generic tool uses to reduce noise
                       statusMsg = ''
                     }
@@ -558,6 +574,12 @@ export async function executeClaudeInSandbox(
       const elapsed = Date.now() - startWaitTime
       const inactiveTime = Date.now() - lastActivityTime
 
+      // Check if output limit was reached
+      if (outputLimitReached) {
+        await logger.info('Output size limit reached')
+        break
+      }
+
       // Check for cancellation every iteration
       if (taskId) {
         const stopped = await isTaskStopped(taskId)
@@ -606,6 +628,17 @@ export async function executeClaudeInSandbox(
     }
 
     await logger.info('Claude completed successfully')
+
+    // Check if output limit caused termination
+    if (outputLimitReached) {
+      return {
+        success: false,
+        error: 'Agent output exceeded size limit',
+        cliName: 'claude',
+        changesDetected: false,
+        sessionId: extractedSessionId,
+      }
+    }
 
     // Better completion detection - check if agent actually ran
     const fullStdout = agentMessageId ? accumulatedContent : capturedOutput

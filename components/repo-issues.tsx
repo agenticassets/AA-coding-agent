@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Checkbox } from '@/components/ui/checkbox'
+import Image from 'next/image'
 import { Label } from '@/components/ui/label'
 import { User, Calendar, MessageSquare, MoreVertical, ListTodo } from 'lucide-react'
 import { toast } from 'sonner'
@@ -240,7 +241,7 @@ export function RepoIssues({ owner, repo }: RepoIssuesProps) {
       <div className="flex items-center justify-center h-64">
         <div className="text-center">
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-current border-r-transparent align-[-0.125em] motion-reduce:animate-[spin_1.5s_linear_infinite]" />
-          <p className="mt-2 text-sm text-muted-foreground">Loading issues...</p>
+          <p className="mt-2 text-sm text-muted-foreground">Loading issues\u2026</p>
         </div>
       </div>
     )
@@ -275,10 +276,13 @@ export function RepoIssues({ owner, repo }: RepoIssuesProps) {
         {issues.map((issue) => (
           <Card key={issue.number} className="p-4 hover:bg-muted/50 transition-colors">
             <div className="flex items-start gap-3">
-              <img
+              <Image
                 src={issue.user.avatar_url}
                 alt={issue.user.login}
+                width={40}
+                height={40}
                 className="h-10 w-10 rounded-full flex-shrink-0"
+                unoptimized
               />
 
               <div className="flex-1 min-w-0">
@@ -451,7 +455,7 @@ export function RepoIssues({ owner, repo }: RepoIssuesProps) {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleCreateTask} disabled={isCreatingTask}>
-              {isCreatingTask ? 'Creating...' : 'Create Task'}
+              {isCreatingTask ? 'Creating\u2026' : 'Create Task'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

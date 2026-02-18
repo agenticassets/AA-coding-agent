@@ -89,11 +89,8 @@ export async function GET(req: NextRequest): Promise<Response> {
     console.log('[GitHub Callback] Token data received, has access_token:', !!tokenData.access_token)
 
     if (!tokenData.access_token) {
-      console.error('[GitHub Callback] Failed to get GitHub access token:', tokenData)
-      return new Response(
-        `Failed to authenticate with GitHub: ${tokenData.error_description || tokenData.error || 'Unknown error'}`,
-        { status: 400 },
-      )
+      console.error('GitHub OAuth token exchange failed')
+      return new Response('Failed to authenticate with GitHub', { status: 400 })
     }
 
     // Fetch GitHub user info
@@ -131,7 +128,12 @@ export async function GET(req: NextRequest): Promise<Response> {
       })
 
       // Save session to cookie
-      await saveSession(response, session)
+      try {
+        await saveSession(response, session)
+      } catch {
+        console.error('Session creation failed')
+        return new Response('Failed to complete sign in', { status: 500 })
+      }
 
       // Clean up cookies
       cookieStore.delete(`github_auth_state`)

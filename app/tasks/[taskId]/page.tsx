@@ -12,12 +12,13 @@ interface TaskPageProps {
 
 export default async function TaskPage({ params }: TaskPageProps) {
   const { taskId } = await params
+
+  // Start independent fetches in parallel
+  const starsPromise = getGitHubStars()
   const session = await getServerSession()
 
-  // Get max sandbox duration for this user (user-specific > global > env var)
-  const maxSandboxDuration = await getMaxSandboxDuration(session?.user?.id)
-
-  const stars = await getGitHubStars()
+  // getMaxSandboxDuration depends on session, but stars is independent
+  const [maxSandboxDuration, stars] = await Promise.all([getMaxSandboxDuration(session?.user?.id), starsPromise])
 
   return (
     <TaskPageClient
@@ -55,7 +56,7 @@ export async function generateMetadata({ params }: TaskPageProps): Promise<Metad
           pageTitle = task[0].title
         } else if (task[0].prompt) {
           // Truncate prompt to 60 characters
-          pageTitle = task[0].prompt.length > 60 ? task[0].prompt.slice(0, 60) + '...' : task[0].prompt
+          pageTitle = task[0].prompt.length > 60 ? task[0].prompt.slice(0, 60) + '\u2026' : task[0].prompt
         }
       }
     } catch (error) {

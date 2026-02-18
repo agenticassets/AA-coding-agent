@@ -8,6 +8,8 @@ This document contains critical rules and guidelines for AI agents working on th
 
 **All log statements MUST use static strings only. NEVER include dynamic values, regardless of severity.**
 
+**Recent Enforcement**: This rule was reinforced on 2026-01-26 with fixes to 8 critical violations in production code. See `CLAUDE.md` "Recent Improvements" for details. Violations will be caught in code review and must be remediated immediately.
+
 #### Bad Examples (DO NOT DO THIS):
 ```typescript
 // BAD - Contains dynamic values
@@ -30,6 +32,7 @@ console.error('Error occurred:', error)
 - **Prevents data leakage**: Dynamic values in logs can expose sensitive information (user IDs, file paths, credentials, etc.) to end users
 - **Security by default**: Logs are displayed directly in the UI and returned in API responses
 - **No exceptions**: This applies to ALL log levels (info, error, success, command, console.log, console.error, console.warn, etc.)
+- **Code review enforcement**: All changes are scanned for logging violations during review
 
 #### Sensitive Data That Must NEVER Appear in Logs:
 - Vercel credentials (SANDBOX_VERCEL_TOKEN, SANDBOX_VERCEL_TEAM_ID, SANDBOX_VERCEL_PROJECT_ID)
@@ -154,6 +157,60 @@ If the user explicitly asks you to start a dev server, politely explain why you 
    console.error('Detailed error for debugging:', error)
    // This appears in server logs, not user-facing logs
    ```
+
+### Decryption Error Handling
+
+**Decryption functions return null/undefined instead of throwing, enabling graceful fallback patterns.**
+
+**decrypt() - Returns `string | null`** (`lib/crypto.ts` for AES-256-CBC)
+```typescript
+const decrypted = decrypt(encryptedText)
+// Returns string if successful
+// Returns null if: ENCRYPTION_KEY missing, invalid format, decryption fails
+
+// Pattern: Check for null and fall back to system env var
+if (decrypted === null) {
+  return process.env.ANTHROPIC_API_KEY  // Fall back to system key
+}
+return decrypted
+```
+
+**decryptJWE() - Returns `T | undefined`** (`lib/jwe/decrypt.ts` for JWE sessions)
+```typescript
+const session = await decryptJWE<Session>(cookieValue)
+// Returns payload if valid JWE
+// Returns undefined if: JWE_SECRET missing, token expired, malformed, corrupted
+
+// Pattern: Check for undefined (JWE implicitly handles expiration)
+if (!session) {
+  return  // Treat as no session, user not authenticated
+}
+```
+
+**Never throw on decryption errors.** Always return null/undefined and let callers decide on fallback:
+- **API keys**: Fall back to system environment variables (user key > system key)
+- **GitHub tokens**: Return null (no token available, task cannot execute)
+- **Sessions**: Return undefined (no authenticated user, redirect to login)
+
+### API Key Retrieval Pattern (User > System)
+
+When fetching API keys, always apply this priority order - **never mix user key with system key**:
+
+```typescript
+import { decrypt } from '@/lib/crypto'
+import { getUserApiKey } from '@/lib/api-keys/user-keys'
+
+// Pattern from lib/api-keys/user-keys.ts
+const decrypted = decrypt(userKey.value)
+if (decrypted === null) return systemKey  // Skip user key if decryption fails
+return decrypted  // User key takes precedence
+```
+
+**Why this matters:**
+- Decryption failures are silent (returns null), not exceptions
+- If user key decryption fails, fall back to system env var (not an error condition)
+- A null user key means "user didn't provide one" or "it's corrupted" - both cases fall back to system
+- Only log static messages: `'Error fetching user API key'` (never log the actual error or values)
 
 ## Testing Changes
 

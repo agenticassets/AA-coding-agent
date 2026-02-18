@@ -1,51 +1,18 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { Check, Loader2, X } from 'lucide-react'
-
-interface CheckRun {
-  id: number
-  name: string
-  status: string
-  conclusion: string | null
-  html_url: string
-  started_at: string | null
-  completed_at: string | null
-}
+import { Check } from 'lucide-react'
+import { useCheckRuns } from '@/lib/hooks/use-check-runs'
 
 interface PRCheckStatusProps {
   taskId: string
+  branchName: string | null | undefined
   prStatus: 'open' | 'closed' | 'merged'
   isActive?: boolean
   className?: string
 }
 
-export function PRCheckStatus({ taskId, prStatus, isActive = false, className = '' }: PRCheckStatusProps) {
-  const [checkRuns, setCheckRuns] = useState<CheckRun[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-
-  useEffect(() => {
-    const fetchCheckRuns = async () => {
-      try {
-        const response = await fetch(`/api/tasks/${taskId}/check-runs`)
-        if (response.ok) {
-          const data = await response.json()
-          if (data.success && data.checkRuns) {
-            setCheckRuns(data.checkRuns)
-          }
-        }
-      } catch (error) {
-        console.error('Error fetching check runs:', error)
-      } finally {
-        setIsLoading(false)
-      }
-    }
-
-    fetchCheckRuns()
-    // Refresh every 30 seconds for in-progress checks
-    const interval = setInterval(fetchCheckRuns, 30000)
-    return () => clearInterval(interval)
-  }, [taskId])
+export function PRCheckStatus({ taskId, branchName, prStatus, isActive = false, className = '' }: PRCheckStatusProps) {
+  const { checkRuns, isLoading } = useCheckRuns(taskId, branchName)
 
   // Only show indicator for open PRs
   if (prStatus !== 'open') {
@@ -70,7 +37,7 @@ export function PRCheckStatus({ taskId, prStatus, isActive = false, className = 
   // Note: Check failed first to ensure failures are always visible, even if other checks are in progress
   if (hasFailed) {
     return (
-      <div className={`absolute -bottom-0.5 -right-0.5 ${bgColor} rounded-full p-0.5 ${className}`}>
+      <div className={`absolute -bottom-0.5 -right-0.5 ${bgColor} rounded-full p-0.5 ${className}`} aria-hidden="true">
         <div className="w-1 h-1 rounded-full bg-red-500" />
       </div>
     )
@@ -78,7 +45,7 @@ export function PRCheckStatus({ taskId, prStatus, isActive = false, className = 
 
   if (hasInProgress) {
     return (
-      <div className={`absolute -bottom-0.5 -right-0.5 ${bgColor} rounded-full p-0.5 ${className}`}>
+      <div className={`absolute -bottom-0.5 -right-0.5 ${bgColor} rounded-full p-0.5 ${className}`} aria-hidden="true">
         <div className="w-1 h-1 rounded-full bg-yellow-500 animate-pulse" />
       </div>
     )
@@ -86,7 +53,7 @@ export function PRCheckStatus({ taskId, prStatus, isActive = false, className = 
 
   if (hasNeutral) {
     return (
-      <div className={`absolute -bottom-0.5 -right-0.5 ${bgColor} rounded-full p-0.5 ${className}`}>
+      <div className={`absolute -bottom-0.5 -right-0.5 ${bgColor} rounded-full p-0.5 ${className}`} aria-hidden="true">
         <div className="w-1 h-1 rounded-full bg-blue-500" />
       </div>
     )
@@ -94,7 +61,7 @@ export function PRCheckStatus({ taskId, prStatus, isActive = false, className = 
 
   if (allPassed) {
     return (
-      <div className={`absolute -bottom-0.5 -right-0.5 ${bgColor} rounded-full p-0.5 ${className}`}>
+      <div className={`absolute -bottom-0.5 -right-0.5 ${bgColor} rounded-full p-0.5 ${className}`} aria-hidden="true">
         <Check className="w-1.5 h-1.5 text-green-500" strokeWidth={3} />
       </div>
     )

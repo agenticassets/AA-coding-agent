@@ -1,7 +1,8 @@
 'use client'
 
-import { TaskMessage, Task } from '@/lib/db/schema'
-import { useState, useEffect, useRef, useCallback, Children, isValidElement } from 'react'
+import type { TaskMessage, Task } from '@/lib/db/schema'
+import { useState, useEffect, useRef, useCallback, Children, isValidElement, startTransition } from 'react'
+import Image from 'next/image'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -24,6 +25,9 @@ import { Streamdown } from 'streamdown'
 import { useAtom } from 'jotai'
 import { taskChatInputAtomFamily } from '@/lib/atoms/task'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { useWindowResize } from '@/lib/hooks/use-window-resize'
+import { useTaskMessages } from '@/lib/hooks/use-task-messages'
+import { useCheckRuns } from '@/lib/hooks/use-check-runs'
 
 interface TaskChatProps {
   taskId: string
@@ -41,16 +45,6 @@ interface PRComment {
   html_url: string
 }
 
-interface CheckRun {
-  id: number
-  name: string
-  status: string
-  conclusion: string | null
-  html_url: string
-  started_at: string
-  completed_at: string | null
-}
-
 interface DeploymentInfo {
   hasDeployment: boolean
   previewUrl?: string
@@ -59,9 +53,8 @@ interface DeploymentInfo {
 }
 
 export function TaskChat({ taskId, task }: TaskChatProps) {
-  const [messages, setMessages] = useState<TaskMessage[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const { messages, isLoading, error, mutate: mutateMessages } = useTaskMessages(taskId)
+  const { checkRuns, isLoading: loadingActions, error: actionsError } = useCheckRuns(taskId, task.branchName)
   const [newMessage, setNewMessage] = useAtom(taskChatInputAtomFamily(taskId))
   const [isSending, setIsSending] = useState(false)
   const [currentTime, setCurrentTime] = useState(Date.now())
@@ -76,9 +69,6 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
   const [prComments, setPrComments] = useState<PRComment[]>([])
   const [loadingComments, setLoadingComments] = useState(false)
   const [commentsError, setCommentsError] = useState<string | null>(null)
-  const [checkRuns, setCheckRuns] = useState<CheckRun[]>([])
-  const [loadingActions, setLoadingActions] = useState(false)
-  const [actionsError, setActionsError] = useState<string | null>(null)
   const [deployment, setDeployment] = useState<DeploymentInfo | null>(null)
   const [loadingDeployment, setLoadingDeployment] = useState(false)
   const [deploymentError, setDeploymentError] = useState<string | null>(null)
@@ -89,7 +79,6 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
 
   // Track if each tab has been loaded to avoid refetching on tab switch
   const commentsLoadedRef = useRef(false)
-  const actionsLoadedRef = useRef(false)
   const deploymentLoadedRef = useRef(false)
 
   const isNearBottom = () => {
@@ -108,34 +97,6 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
     if (!container) return
     container.scrollTop = container.scrollHeight
   }
-
-  const fetchMessages = useCallback(
-    async (showLoading = true) => {
-      if (showLoading) {
-        setIsLoading(true)
-      }
-      setError(null)
-
-      try {
-        const response = await fetch(`/api/tasks/${taskId}/messages`)
-        const data = await response.json()
-
-        if (response.ok && data.success) {
-          setMessages(data.messages)
-        } else {
-          setError(data.error || 'Failed to fetch messages')
-        }
-      } catch (err) {
-        console.error('Error fetching messages:', err)
-        setError('Failed to fetch messages')
-      } finally {
-        if (showLoading) {
-          setIsLoading(false)
-        }
-      }
-    },
-    [taskId],
-  )
 
   const fetchPRComments = useCallback(
     async (showLoading = true) => {
@@ -169,40 +130,6 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
       }
     },
     [taskId, task.prNumber, task.repoUrl],
-  )
-
-  const fetchCheckRuns = useCallback(
-    async (showLoading = true) => {
-      if (!task.branchName || !task.repoUrl) return
-
-      // Don't refetch if already loaded
-      if (actionsLoadedRef.current && showLoading) return
-
-      if (showLoading) {
-        setLoadingActions(true)
-      }
-      setActionsError(null)
-
-      try {
-        const response = await fetch(`/api/tasks/${taskId}/check-runs`)
-        const data = await response.json()
-
-        if (response.ok && data.success) {
-          setCheckRuns(data.checkRuns || [])
-          actionsLoadedRef.current = true
-        } else {
-          setActionsError(data.error || 'Failed to fetch check runs')
-        }
-      } catch (err) {
-        console.error('Error fetching check runs:', err)
-        setActionsError('Failed to fetch check runs')
-      } finally {
-        if (showLoading) {
-          setLoadingActions(false)
-        }
-      }
-    },
-    [taskId, task.branchName, task.repoUrl],
   )
 
   const fetchDeployment = useCallback(
@@ -240,7 +167,7 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
   const handleRefresh = useCallback(() => {
     switch (activeTab) {
       case 'chat':
-        fetchMessages(false)
+        mutateMessages()
         break
       case 'comments':
         if (task.prNumber) {
@@ -249,92 +176,57 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
         }
         break
       case 'actions':
-        if (task.branchName) {
-          actionsLoadedRef.current = false
-          fetchCheckRuns()
-        }
+        // Check runs are automatically refreshed by SWR hook
         break
       case 'deployments':
         deploymentLoadedRef.current = false
         fetchDeployment()
         break
     }
-  }, [activeTab, task.prNumber, task.branchName, fetchMessages, fetchPRComments, fetchCheckRuns, fetchDeployment])
+  }, [activeTab, task.prNumber, mutateMessages, fetchPRComments, fetchDeployment])
 
+  // Consolidate PR number and branch name change handlers to reduce duplicate logic
+  // Extract primitive values to avoid unnecessary recreations
+  const prNumber = task.prNumber
+  const branchName = task.branchName
+
+  // Auto-refresh for active tab (Comments, Deployments)
+  // Defer heavy async fetches with startTransition to keep UI responsive
+  // Note: Actions tab uses SWR hook which handles polling automatically
   useEffect(() => {
-    fetchMessages(true) // Show loading on initial fetch
-
-    // Poll for new messages every 3 seconds without showing loading state
-    const interval = setInterval(() => {
-      fetchMessages(false) // Don't show loading on polls
-    }, 3000)
-
-    return () => clearInterval(interval)
-  }, [fetchMessages])
-
-  // Auto-refresh for active tab (Comments, Checks, Deployments)
-  useEffect(() => {
-    if (activeTab === 'chat') return // Chat already has its own refresh
+    if (activeTab === 'chat' || activeTab === 'actions') return // Chat and actions have their own refresh
 
     const refreshInterval = 30000 // 30 seconds
 
     const interval = setInterval(() => {
-      switch (activeTab) {
-        case 'comments':
-          if (task.prNumber) {
-            commentsLoadedRef.current = false
-            fetchPRComments(false) // Don't show loading on auto-refresh
-          }
-          break
-        case 'actions':
-          if (task.branchName) {
-            actionsLoadedRef.current = false
-            fetchCheckRuns(false) // Don't show loading on auto-refresh
-          }
-          break
-        case 'deployments':
-          deploymentLoadedRef.current = false
-          fetchDeployment(false) // Don't show loading on auto-refresh
-          break
-      }
+      startTransition(() => {
+        switch (activeTab) {
+          case 'comments':
+            if (prNumber) {
+              commentsLoadedRef.current = false
+              fetchPRComments(false) // Don't show loading on auto-refresh
+            }
+            break
+          case 'deployments':
+            deploymentLoadedRef.current = false
+            fetchDeployment(false) // Don't show loading on auto-refresh
+            break
+        }
+      })
     }, refreshInterval)
 
     return () => clearInterval(interval)
-  }, [activeTab, task.prNumber, task.branchName, fetchPRComments, fetchCheckRuns, fetchDeployment])
+  }, [activeTab, prNumber, fetchPRComments, fetchDeployment])
 
-  // Reset cache and refetch when PR number changes (PR created/updated)
+  // Consolidated effect: Fetch data when tab switches OR when required data becomes available
+  // Uses primitive values (prNumber) to avoid unnecessary re-runs
+  // Note: Actions tab uses SWR hook which fetches automatically when branchName is available
   useEffect(() => {
-    if (task.prNumber) {
+    if (activeTab === 'comments' && prNumber) {
       commentsLoadedRef.current = false
-      if (activeTab === 'comments') {
-        fetchPRComments()
-      }
-    }
-  }, [task.prNumber, activeTab, fetchPRComments])
-
-  // Reset cache and refetch when branch name changes (branch created)
-  useEffect(() => {
-    if (task.branchName) {
-      actionsLoadedRef.current = false
-      if (activeTab === 'actions') {
-        fetchCheckRuns()
-      }
-    }
-  }, [task.branchName, activeTab, fetchCheckRuns])
-
-  // Fetch PR comments when tab switches to comments
-  useEffect(() => {
-    if (activeTab === 'comments' && task.prNumber) {
       fetchPRComments()
     }
-  }, [activeTab, task.prNumber, fetchPRComments])
-
-  // Fetch check runs when tab switches to actions
-  useEffect(() => {
-    if (activeTab === 'actions' && task.branchName) {
-      fetchCheckRuns()
-    }
-  }, [activeTab, task.branchName, fetchCheckRuns])
+  }, [activeTab, prNumber, fetchPRComments])
 
   // Fetch deployment when tab switches to deployments
   useEffect(() => {
@@ -352,46 +244,45 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
       wasAtBottomRef.current = isNearBottom()
     }
 
-    container.addEventListener('scroll', handleScroll)
+    container.addEventListener('scroll', handleScroll, { passive: true })
     return () => container.removeEventListener('scroll', handleScroll)
   }, [])
 
   // Calculate heights for user messages to create proper sticky stacking
-  useEffect(() => {
+  const measureHeights = useCallback(() => {
     const displayMessages = messages.slice(-10)
     const userMessages = displayMessages.filter((m) => m.role === 'user')
 
     if (userMessages.length === 0) return
 
-    const measureHeights = () => {
-      const newHeights: Record<string, number> = {}
-      const newOverflowing = new Set<string>()
+    const newHeights: Record<string, number> = {}
+    const newOverflowing = new Set<string>()
 
-      userMessages.forEach((message) => {
-        const el = messageRefs.current[message.id]
-        const contentEl = contentRefs.current[message.id]
+    userMessages.forEach((message) => {
+      const el = messageRefs.current[message.id]
+      const contentEl = contentRefs.current[message.id]
 
-        if (el) {
-          newHeights[message.id] = el.offsetHeight
-        }
+      if (el) {
+        newHeights[message.id] = el.offsetHeight
+      }
 
-        // Check if content is overflowing the max-height (72px ~ 4 lines)
-        if (contentEl && contentEl.scrollHeight > 72) {
-          newOverflowing.add(message.id)
-        }
-      })
+      // Check if content is overflowing the max-height (72px ~ 4 lines)
+      if (contentEl && contentEl.scrollHeight > 72) {
+        newOverflowing.add(message.id)
+      }
+    })
 
-      setUserMessageHeights(newHeights)
-      setOverflowingMessages(newOverflowing)
-    }
-
-    // Measure after render
-    setTimeout(measureHeights, 0)
-
-    // Remeasure on window resize
-    window.addEventListener('resize', measureHeights)
-    return () => window.removeEventListener('resize', measureHeights)
+    setUserMessageHeights(newHeights)
+    setOverflowingMessages(newOverflowing)
   }, [messages])
+
+  // Use centralized resize hook to trigger height measurement
+  useWindowResize(1024, measureHeights)
+
+  // Initial measure after render
+  useEffect(() => {
+    setTimeout(measureHeights, 0)
+  }, [measureHeights])
 
   // Auto-scroll when messages change if user was at bottom
   useEffect(() => {
@@ -483,8 +374,8 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
       const data = await response.json()
 
       if (response.ok) {
-        // Refresh messages to show the new user message without loading state
-        await fetchMessages(false)
+        // Revalidate messages to show the new user message
+        await mutateMessages()
         // Message was sent successfully, keep it cleared
       } else {
         toast.error(data.error || 'Failed to send message')
@@ -536,8 +427,8 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
       const data = await response.json()
 
       if (response.ok) {
-        // Refresh messages to show the new user message without loading state
-        await fetchMessages(false)
+        // Revalidate messages to show the new user message
+        await mutateMessages()
       } else {
         toast.error(data.error || 'Failed to resend message')
       }
@@ -701,7 +592,7 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
           ) : actionsError ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
-                <p className="text-destructive mb-2 text-xs md:text-sm">{actionsError}</p>
+                <p className="text-destructive mb-2 text-xs md:text-sm">Failed to fetch check runs</p>
               </div>
             </div>
           ) : checkRuns.length === 0 ? (
@@ -725,7 +616,7 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
                       {check.status === 'completed' && check.completed_at
                         ? `Completed ${new Date(check.completed_at).toLocaleString()}`
                         : check.status === 'in_progress'
-                          ? 'In progress...'
+                          ? 'In progress\u2026'
                           : 'Queued'}
                     </div>
                   </div>
@@ -763,10 +654,13 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
               {prComments.map((comment) => (
                 <div key={comment.id} className="px-2">
                   <div className="flex items-start gap-2 mb-2">
-                    <img
+                    <Image
                       src={comment.user.avatar_url}
                       alt={comment.user.login}
+                      width={24}
+                      height={24}
                       className="w-6 h-6 rounded-full flex-shrink-0"
+                      unoptimized
                     />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
@@ -827,8 +721,11 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
                     </div>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <button className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted transition-colors">
-                          <MoreVertical className="h-4 w-4 text-muted-foreground" />
+                        <button
+                          className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted transition-colors"
+                          aria-label="Comment actions"
+                        >
+                          <MoreVertical className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                         </button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
@@ -956,17 +853,19 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
                       onClick={() => handleRetryMessage(group.userMessage.content)}
                       disabled={isSending}
                       className="h-3.5 w-3.5 opacity-30 hover:opacity-70 flex items-center justify-center disabled:opacity-20"
+                      aria-label="Retry message"
                     >
-                      <RotateCcw className="h-3 w-3" />
+                      <RotateCcw className="h-3 w-3" aria-hidden="true" />
                     </button>
                     <button
                       onClick={() => handleCopyMessage(group.userMessage.id, group.userMessage.content)}
                       className="h-3.5 w-3.5 opacity-30 hover:opacity-70 flex items-center justify-center"
+                      aria-label="Copy message"
                     >
                       {copiedMessageId === group.userMessage.id ? (
-                        <Check className="h-3 w-3" />
+                        <Check className="h-3 w-3" aria-hidden="true" />
                       ) : (
-                        <Copy className="h-3 w-3" />
+                        <Copy className="h-3 w-3" aria-hidden="true" />
                       )}
                     </button>
                   </div>
@@ -982,7 +881,7 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
                         ? (() => {
                             return (
                               <div className="opacity-50">
-                                <div className="italic">Generating response...</div>
+                                <div className="italic">Generating response&hellip;</div>
                                 <div className="text-right font-mono opacity-70 mt-1">
                                   {formatDuration(group.userMessage.createdAt)}
                                 </div>
@@ -1128,11 +1027,12 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
                         <button
                           onClick={() => handleCopyMessage(agentMessage.id, parseAgentMessage(agentMessage.content))}
                           className="h-3.5 w-3.5 opacity-30 hover:opacity-70 flex items-center justify-center"
+                          aria-label="Copy response"
                         >
                           {copiedMessageId === agentMessage.id ? (
-                            <Check className="h-3 w-3" />
+                            <Check className="h-3 w-3" aria-hidden="true" />
                           ) : (
-                            <Copy className="h-3 w-3" />
+                            <Copy className="h-3 w-3" aria-hidden="true" />
                           )}
                         </button>
                       )}
@@ -1154,7 +1054,7 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
               // Check if this is the first user message (sandbox initialization)
               const userMessages = displayMessages.filter((m) => m.role === 'user')
               const isFirstMessage = userMessages.length === 1
-              const placeholderText = isFirstMessage ? 'Awaiting response...' : 'Awaiting response...'
+              const placeholderText = isFirstMessage ? 'Awaiting response\u2026' : 'Awaiting response\u2026'
 
               return (
                 <div className="mt-4">
@@ -1215,8 +1115,14 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
             Deployments
           </button>
         </div>
-        <Button variant="ghost" size="sm" onClick={handleRefresh} className="h-6 w-6 p-0 flex-shrink-0" title="Refresh">
-          <RefreshCw className="h-4 w-4" />
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleRefresh}
+          className="h-6 w-6 p-0 flex-shrink-0"
+          aria-label="Refresh"
+        >
+          <RefreshCw className="h-4 w-4" aria-hidden="true" />
         </Button>
       </div>
 
@@ -1230,7 +1136,8 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Send a follow-up message..."
+            placeholder="Send a follow-up message\u2026"
+            aria-label="Follow-up message"
             className="w-full min-h-[60px] max-h-[120px] resize-none pr-12 text-base md:text-xs"
             disabled={isSending}
           />
@@ -1239,16 +1146,22 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
               onClick={handleStopTask}
               disabled={isStopping}
               className="absolute bottom-2 right-2 rounded-full h-5 w-5 bg-primary text-primary-foreground hover:bg-primary/90 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+              aria-label="Stop task"
             >
-              <Square className="h-3 w-3" fill="currentColor" />
+              <Square className="h-3 w-3" fill="currentColor" aria-hidden="true" />
             </button>
           ) : (
             <button
               onClick={handleSendMessage}
               disabled={!newMessage.trim() || isSending}
               className="absolute bottom-2 right-2 rounded-full h-5 w-5 bg-primary text-primary-foreground hover:bg-primary/90 flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+              aria-label={isSending ? 'Sending message' : 'Send message'}
             >
-              {isSending ? <Loader2 className="h-3 w-3 animate-spin" /> : <ArrowUp className="h-3 w-3" />}
+              {isSending ? (
+                <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+              ) : (
+                <ArrowUp className="h-3 w-3" aria-hidden="true" />
+              )}
             </button>
           )}
         </div>
