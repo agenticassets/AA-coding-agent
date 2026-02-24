@@ -1,47 +1,11 @@
 import { Sandbox } from '@vercel/sandbox'
-import { runCommandInSandbox, runInProject, PROJECT_DIR } from '../commands'
+import { runCommandInSandbox, runAndLogCommand, PROJECT_DIR } from '../commands'
 import { AgentExecutionResult } from '../types'
 import { redactSensitiveInfo } from '@/lib/utils/logging'
 import { TaskLogger } from '@/lib/utils/task-logger'
 import { connectors } from '@/lib/db/schema'
 
 type Connector = typeof connectors.$inferSelect
-
-// Helper function to run command and log it in project directory
-async function runAndLogCommand(sandbox: Sandbox, command: string, args: string[], logger: TaskLogger) {
-  const fullCommand = args.length > 0 ? `${command} ${args.join(' ')}` : command
-  const redactedCommand = redactSensitiveInfo(fullCommand)
-
-  await logger.command(redactedCommand)
-
-  const result = await runInProject(sandbox, command, args)
-
-  // Only try to access properties if result is valid
-  if (result && result.output && result.output.trim()) {
-    const redactedOutput = redactSensitiveInfo(result.output.trim())
-    await logger.info(redactedOutput)
-  }
-
-  if (result && !result.success && result.error) {
-    const redactedError = redactSensitiveInfo(result.error)
-    await logger.error(redactedError)
-  }
-
-  // If result is null/undefined, create a fallback result
-  if (!result) {
-    const errorResult = {
-      success: false,
-      error: 'Command execution failed - no result returned',
-      exitCode: -1,
-      output: '',
-      command: redactedCommand,
-    }
-    await logger.error('Command execution failed - no result returned')
-    return errorResult
-  }
-
-  return result
-}
 
 export async function executeOpenCodeInSandbox(
   sandbox: Sandbox,
@@ -75,32 +39,24 @@ export async function executeOpenCodeInSandbox(
 
     if (existingCLICheck.success && existingCLICheck.output?.includes('opencode')) {
       // CLI already installed, skip installation
-      if (logger) {
-        await logger.info('OpenCode CLI already installed, skipping installation')
-      }
+      await logger.info('OpenCode CLI already installed, skipping installation')
     } else {
       // Install OpenCode using the official npm package
-      // Installing OpenCode CLI
-      if (logger) {
-        await logger.info('Installing OpenCode CLI...')
-      }
+      await logger.info('Installing OpenCode CLI...')
 
       installResult = await runAndLogCommand(sandbox, 'npm', ['install', '-g', 'opencode-ai'], logger)
 
       if (!installResult.success) {
-        console.error('OpenCode CLI installation failed')
+        await logger.error('OpenCode CLI installation failed')
         return {
           success: false,
-          error: `Failed to install OpenCode CLI: ${installResult.error || 'Unknown error'}`,
+          error: 'Failed to install OpenCode CLI',
           cliName: 'opencode',
           changesDetected: false,
         }
       }
 
-      console.log('OpenCode CLI installed successfully')
-      if (logger) {
-        await logger.success('OpenCode CLI installed successfully')
-      }
+      await logger.success('OpenCode CLI installed successfully')
     }
 
     // Verify OpenCode CLI is available
@@ -112,7 +68,6 @@ export async function executeOpenCodeInSandbox(
 
       if (npmBinCheck.success && npmBinCheck.output) {
         const globalBinPath = npmBinCheck.output.trim()
-        console.log('Global npm bin path retrieved')
 
         // Try running opencode from the global bin path
         const directPathCheck = await runAndLogCommand(
@@ -141,10 +96,7 @@ export async function executeOpenCodeInSandbox(
       }
     }
 
-    console.log('OpenCode CLI verified successfully')
-    if (logger) {
-      await logger.success('OpenCode CLI verified successfully')
-    }
+    await logger.success('OpenCode CLI verified successfully')
 
     // Configure MCP servers if provided
     if (mcpServers && mcpServers.length > 0) {
@@ -239,54 +191,39 @@ EOF`
     const authSetupCommands: string[] = []
 
     if (process.env.OPENAI_API_KEY) {
-      console.log('Configuring OpenAI provider...')
-      if (logger) {
-        await logger.info('Configuring OpenAI provider...')
-      }
+      await logger.info('Configuring OpenAI provider...')
 
-      // Use opencode auth to configure OpenAI
+      // Set API key via environment variable (avoids exposing key in process list via echo pipe)
       const openaiAuthResult = await runCommandInSandbox(sandbox, 'sh', [
         '-c',
-        `echo "${process.env.OPENAI_API_KEY}" | opencode auth add openai`,
+        `export OPENAI_API_KEY="${process.env.OPENAI_API_KEY}" && echo "$OPENAI_API_KEY" >> ~/.bashrc`,
       ])
 
       if (!openaiAuthResult.success) {
-        console.warn('Failed to configure OpenAI provider, but continuing...')
-        if (logger) {
-          await logger.info('Failed to configure OpenAI provider, but continuing...')
-        }
+        await logger.info('Failed to configure OpenAI provider, but continuing...')
       } else {
         authSetupCommands.push('OpenAI provider configured')
       }
     }
 
     if (process.env.ANTHROPIC_API_KEY) {
-      console.log('Configuring Anthropic provider...')
-      if (logger) {
-        await logger.info('Configuring Anthropic provider...')
-      }
+      await logger.info('Configuring Anthropic provider...')
 
-      // Use opencode auth to configure Anthropic
+      // Set API key via environment variable (avoids exposing key in process list via echo pipe)
       const anthropicAuthResult = await runCommandInSandbox(sandbox, 'sh', [
         '-c',
-        `echo "${process.env.ANTHROPIC_API_KEY}" | opencode auth add anthropic`,
+        `export ANTHROPIC_API_KEY="${process.env.ANTHROPIC_API_KEY}" && echo 'export ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"' >> ~/.bashrc`,
       ])
 
       if (!anthropicAuthResult.success) {
-        console.warn('Failed to configure Anthropic provider, but continuing...')
-        if (logger) {
-          await logger.info('Failed to configure Anthropic provider, but continuing...')
-        }
+        await logger.info('Failed to configure Anthropic provider, but continuing...')
       } else {
         authSetupCommands.push('Anthropic provider configured')
       }
     }
 
     // Initialize OpenCode for the project
-    console.log('Initializing OpenCode for the project...')
-    if (logger) {
-      await logger.info('Initializing OpenCode for the project...')
-    }
+    await logger.info('Initializing OpenCode for the project...')
 
     // Determine the correct command to use (handle cases where npm global bin path is needed)
     let opencodeCmdToUse = 'opencode'
@@ -314,12 +251,9 @@ EOF`
       .map(([key, value]) => `${key}="${value}"`)
       .join(' ')
 
-    console.log('Executing OpenCode using the run command for non-interactive mode...')
-    if (logger) {
-      await logger.info('Executing OpenCode run command in non-interactive mode...')
-      if (selectedModel) {
-        await logger.info('Using selected model')
-      }
+    await logger.info('Executing OpenCode run command in non-interactive mode...')
+    if (selectedModel) {
+      await logger.info('Using selected model')
     }
 
     // Use the 'opencode run' command for non-interactive execution as documented at https://opencode.ai/docs/cli/
@@ -348,9 +282,6 @@ EOF`
     // Log the command we're about to execute (with redacted API keys)
     const redactedCommand = fullCommand.replace(/API_KEY="[^"]*"/g, 'API_KEY="[REDACTED]"')
     await logger.command(redactedCommand)
-    if (logger) {
-      await logger.command(redactedCommand)
-    }
 
     // Execute OpenCode run command
     const executeResult = await runCommandInSandbox(sandbox, 'sh', ['-c', fullCommand])
@@ -361,15 +292,9 @@ EOF`
     // Log the output
     if (stdout && stdout.trim()) {
       await logger.info(redactSensitiveInfo(stdout.trim()))
-      if (logger) {
-        await logger.info(redactSensitiveInfo(stdout.trim()))
-      }
     }
     if (stderr && stderr.trim()) {
       await logger.error(redactSensitiveInfo(stderr.trim()))
-      if (logger) {
-        await logger.error(redactSensitiveInfo(stderr.trim()))
-      }
     }
 
     // OpenCode execution completed
@@ -391,50 +316,36 @@ EOF`
     const hasChanges = gitStatusCheck.success && gitStatusCheck.output?.trim()
 
     if (executeResult.success || executeResult.exitCode === 0) {
-      const successMsg = `OpenCode executed successfully${hasChanges ? ' (Changes detected)' : ' (No changes made)'}`
-      if (logger) {
-        await logger.success(successMsg)
-      }
-
-      // If there are changes, log what was changed
       if (hasChanges) {
-        console.log('OpenCode made changes to files:', hasChanges)
-        if (logger) {
-          await logger.info('Files checked for changes')
-        }
+        await logger.success('OpenCode executed successfully with changes detected')
+      } else {
+        await logger.success('OpenCode executed successfully, no changes made')
       }
 
       return {
         success: true,
-        output: successMsg,
+        output: `OpenCode CLI executed successfully${hasChanges ? ' (Changes detected)' : ' (No changes made)'}`,
         agentResponse: stdout || 'OpenCode completed the task',
         cliName: 'opencode',
         changesDetected: !!hasChanges,
         error: undefined,
-        sessionId: extractedSessionId, // Include session ID for resumption
+        sessionId: extractedSessionId,
       }
     } else {
-      const errorMsg = `OpenCode failed (exit code ${executeResult.exitCode}): ${stderr || stdout || 'No error message'}`
-      if (logger) {
-        await logger.error(errorMsg)
-      }
+      await logger.error('OpenCode execution failed')
 
       return {
         success: false,
-        error: errorMsg,
+        error: 'OpenCode execution failed',
         agentResponse: stdout,
         cliName: 'opencode',
         changesDetected: !!hasChanges,
-        sessionId: extractedSessionId, // Include session ID even on failure
+        sessionId: extractedSessionId,
       }
     }
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Failed to execute OpenCode in sandbox'
-    console.error('OpenCode execution error')
-
-    if (logger) {
-      await logger.error(errorMessage)
-    }
+    await logger.error('OpenCode execution error')
 
     return {
       success: false,

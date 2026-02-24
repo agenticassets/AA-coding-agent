@@ -1,4 +1,6 @@
 import { Sandbox } from '@vercel/sandbox'
+import { redactSensitiveInfo } from '@/lib/utils/logging'
+import { TaskLogger } from '@/lib/utils/task-logger'
 
 // Project directory where repo is cloned
 export const PROJECT_DIR = '/vercel/sandbox/project'
@@ -73,6 +75,55 @@ export async function runInProject(sandbox: Sandbox, command: string, args: stri
   const fullCommand = args.length > 0 ? `${command} ${args.map(escapeArg).join(' ')}` : command
   const cdCommand = `cd ${PROJECT_DIR} && ${fullCommand}`
   return await runCommandInSandbox(sandbox, 'sh', ['-c', cdCommand])
+}
+
+/**
+ * Shared utility: run a command in the project directory and log the result.
+ * Replaces duplicate runAndLogCommand helpers across agent files.
+ * @param cwd - Optional working directory override (defaults to PROJECT_DIR via runInProject)
+ */
+export async function runAndLogCommand(
+  sandbox: Sandbox,
+  command: string,
+  args: string[],
+  logger: TaskLogger,
+  cwd?: string,
+): Promise<CommandResult> {
+  const fullCommand = args.length > 0 ? `${command} ${args.join(' ')}` : command
+  const redactedCommand = redactSensitiveInfo(fullCommand)
+
+  await logger.command(redactedCommand)
+
+  let result: CommandResult
+  if (cwd) {
+    const cdCommand = `cd ${cwd} && ${fullCommand}`
+    result = await runCommandInSandbox(sandbox, 'sh', ['-c', cdCommand])
+  } else {
+    result = await runInProject(sandbox, command, args)
+  }
+
+  if (result && result.output && result.output.trim()) {
+    const redactedOutput = redactSensitiveInfo(result.output.trim())
+    await logger.info(redactedOutput)
+  }
+
+  if (result && !result.success && result.error) {
+    const redactedError = redactSensitiveInfo(result.error)
+    await logger.error(redactedError)
+  }
+
+  if (!result) {
+    await logger.error('Command execution failed - no result returned')
+    return {
+      success: false,
+      error: 'Command execution failed - no result returned',
+      exitCode: -1,
+      output: '',
+      command: redactedCommand,
+    }
+  }
+
+  return result
 }
 
 export async function runStreamingCommandInSandbox(

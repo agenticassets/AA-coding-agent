@@ -1,5 +1,5 @@
 import { Sandbox } from '@vercel/sandbox'
-import { runCommandInSandbox, runInProject, PROJECT_DIR } from '../commands'
+import { runCommandInSandbox, runAndLogCommand, PROJECT_DIR } from '../commands'
 import { AgentExecutionResult } from '../types'
 import { redactSensitiveInfo } from '@/lib/utils/logging'
 import { TaskLogger } from '@/lib/utils/task-logger'
@@ -9,24 +9,6 @@ import { eq } from 'drizzle-orm'
 import { generateId } from '@/lib/utils/id'
 
 type Connector = typeof connectors.$inferSelect
-
-// Helper function to run command and collect logs in project directory
-async function runAndLogCommand(sandbox: Sandbox, command: string, args: string[], logger: TaskLogger) {
-  const fullCommand = args.length > 0 ? `${command} ${args.join(' ')}` : command
-  await logger.command(redactSensitiveInfo(fullCommand))
-
-  const result = await runInProject(sandbox, command, args)
-
-  if (result.output && result.output.trim()) {
-    await logger.info(redactSensitiveInfo(result.output.trim()))
-  }
-
-  if (!result.success && result.error) {
-    await logger.error(redactSensitiveInfo(result.error))
-  }
-
-  return result
-}
 
 export async function executeCopilotInSandbox(
   sandbox: Sandbox,
@@ -237,7 +219,7 @@ EOF`
                 db.update(taskMessages)
                   .set({ content: accumulatedContent })
                   .where(eq(taskMessages.id, agentMessageId))
-                  .catch((err: Error) => {
+                  .catch(() => {
                     // Silently ignore update errors to avoid flooding logs
                   })
               }
@@ -347,7 +329,7 @@ EOF`
         .update(taskMessages)
         .set({ content: accumulatedContent })
         .where(eq(taskMessages.id, agentMessageId))
-        .catch((err: Error) => console.error('Failed to update message'))
+        .catch(() => console.error('Failed to update streaming message'))
     }
 
     // Check if any files were modified
@@ -373,7 +355,7 @@ EOF`
         .update(taskMessages)
         .set({ content: accumulatedContent })
         .where(eq(taskMessages.id, agentMessageId))
-        .catch((err: Error) => console.error('Failed to update message'))
+        .catch(() => console.error('Failed to update streaming message'))
     }
 
     const errorMessage = error instanceof Error ? error.message : 'Failed to execute GitHub Copilot CLI in sandbox'

@@ -55,7 +55,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   }
 
   try {
-    console.log('[GitHub Callback] Starting OAuth flow, mode:', authMode)
+    console.log('[GitHub Callback] Starting OAuth flow')
 
     // Exchange code for access token
     const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
@@ -72,9 +72,7 @@ export async function GET(req: NextRequest): Promise<Response> {
     })
 
     if (!tokenResponse.ok) {
-      console.error('[GitHub Callback] Token exchange failed with status:', tokenResponse.status)
-      const errorText = await tokenResponse.text()
-      console.error('[GitHub Callback] Error response:')
+      console.error('[GitHub Callback] Token exchange failed')
       return new Response('Failed to exchange code for token', { status: 400 })
     }
 
@@ -86,7 +84,7 @@ export async function GET(req: NextRequest): Promise<Response> {
       error_description?: string
     }
 
-    console.log('[GitHub Callback] Token data received, has access_token:', !!tokenData.access_token)
+    console.log('[GitHub Callback] Token exchange completed')
 
     if (!tokenData.access_token) {
       console.error('GitHub OAuth token exchange failed')
@@ -101,9 +99,19 @@ export async function GET(req: NextRequest): Promise<Response> {
       },
     })
 
+    if (!userResponse.ok) {
+      console.error('[GitHub Callback] Failed to fetch GitHub user info')
+      return new Response('Failed to fetch GitHub user information', { status: 400 })
+    }
+
     const githubUser = (await userResponse.json()) as {
       login: string
       id: number
+    }
+
+    if (!githubUser.login || !githubUser.id) {
+      console.error('[GitHub Callback] Invalid GitHub user data received')
+      return new Response('Invalid GitHub user data', { status: 400 })
     }
 
     if (isSignInFlow) {
@@ -116,7 +124,7 @@ export async function GET(req: NextRequest): Promise<Response> {
         return new Response('Failed to create session', { status: 500 })
       }
 
-      console.log('[GitHub Callback] GitHub session created for user:', session.user.id)
+      console.log('[GitHub Callback] GitHub session created successfully')
       // Note: Tokens are already stored in users table by upsertUser() in createGitHubSession()
 
       // Create response with redirect
@@ -143,8 +151,12 @@ export async function GET(req: NextRequest): Promise<Response> {
       return response
     } else {
       // CONNECT FLOW: Add GitHub account to existing Vercel user
-      // Encrypt the access token before storing
+      // Encrypt the access token before storing and validate the result
       const encryptedToken = encrypt(tokenData.access_token)
+      if (!encryptedToken) {
+        console.error('[GitHub Callback] Failed to encrypt access token')
+        return new Response('Failed to process authentication', { status: 500 })
+      }
 
       // Check if this GitHub account is already connected somewhere
       const existingAccount = await db
@@ -158,22 +170,20 @@ export async function GET(req: NextRequest): Promise<Response> {
 
         // If the GitHub account belongs to a different user, we need to merge accounts
         if (connectedUserId !== storedUserId) {
-          console.log(
-            `[GitHub Callback] Merging accounts: GitHub account ${githubUser.id} belongs to user ${connectedUserId}, connecting to user ${storedUserId}`,
-          )
+          console.log('[GitHub Callback] Merging accounts from different users')
 
-          // Transfer all tasks, connectors, accounts, and keys from old user to new user
-          await db.update(tasks).set({ userId: storedUserId! }).where(eq(tasks.userId, connectedUserId))
-          await db.update(connectors).set({ userId: storedUserId! }).where(eq(connectors.userId, connectedUserId))
-          await db.update(accounts).set({ userId: storedUserId! }).where(eq(accounts.userId, connectedUserId))
-          await db.update(keys).set({ userId: storedUserId! }).where(eq(keys.userId, connectedUserId))
+          // Transfer all tasks, connectors, accounts, and keys from old user to new user (batched)
+          await Promise.all([
+            db.update(tasks).set({ userId: storedUserId! }).where(eq(tasks.userId, connectedUserId)),
+            db.update(connectors).set({ userId: storedUserId! }).where(eq(connectors.userId, connectedUserId)),
+            db.update(accounts).set({ userId: storedUserId! }).where(eq(accounts.userId, connectedUserId)),
+            db.update(keys).set({ userId: storedUserId! }).where(eq(keys.userId, connectedUserId)),
+          ])
 
           // Delete the old user record (this will cascade delete their accounts/keys)
           await db.delete(users).where(eq(users.id, connectedUserId))
 
-          console.log(
-            `[GitHub Callback] Account merge complete. Old user ${connectedUserId} merged into ${storedUserId}`,
-          )
+          console.log('[GitHub Callback] Account merge complete')
 
           // Update the GitHub account token
           await db

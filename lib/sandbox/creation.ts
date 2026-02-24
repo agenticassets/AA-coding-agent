@@ -1,47 +1,11 @@
 import { Sandbox } from '@vercel/sandbox'
 import { validateEnvironmentVariables, createAuthenticatedRepoUrl } from './config'
-import { runCommandInSandbox, runInProject, PROJECT_DIR } from './commands'
+import { runCommandInSandbox, runInProject, runAndLogCommand, PROJECT_DIR } from './commands'
 import { generateId } from '@/lib/utils/id'
 import { SandboxConfig, SandboxResult } from './types'
-import { redactSensitiveInfo } from '@/lib/utils/logging'
 import { TaskLogger } from '@/lib/utils/task-logger'
 import { detectPackageManager, installDependencies } from './package-manager'
 import { registerSandbox } from './sandbox-registry'
-
-// Helper function to run command and log it
-async function runAndLogCommand(sandbox: Sandbox, command: string, args: string[], logger: TaskLogger, cwd?: string) {
-  // Properly escape arguments for shell execution
-  const escapeArg = (arg: string) => {
-    // Escape single quotes by replacing ' with '\''
-    return `'${arg.replace(/'/g, "'\\''")}'`
-  }
-
-  const fullCommand = args.length > 0 ? `${command} ${args.map(escapeArg).join(' ')}` : command
-  const redactedCommand = redactSensitiveInfo(fullCommand)
-
-  await logger.command(redactedCommand)
-
-  let result
-  if (cwd) {
-    // Run command in specific directory
-    const cdCommand = `cd ${cwd} && ${fullCommand}`
-    result = await runCommandInSandbox(sandbox, 'sh', ['-c', cdCommand])
-  } else {
-    result = await runCommandInSandbox(sandbox, command, args)
-  }
-
-  if (result && result.output && result.output.trim()) {
-    const redactedOutput = redactSensitiveInfo(result.output.trim())
-    await logger.info(redactedOutput)
-  }
-
-  if (result && !result.success && result.error) {
-    const redactedError = redactSensitiveInfo(result.error)
-    await logger.error(redactedError)
-  }
-
-  return result
-}
 
 export async function createSandbox(config: SandboxConfig, logger: TaskLogger): Promise<SandboxResult> {
   try {
@@ -100,6 +64,13 @@ export async function createSandbox(config: SandboxConfig, logger: TaskLogger): 
 
       // Register the sandbox immediately for potential killing
       registerSandbox(config.taskId, sandbox, config.keepAlive || false)
+
+      // Quick health check to verify sandbox is responsive
+      const healthCheck = await runCommandInSandbox(sandbox, 'echo', ['ok'])
+      if (!healthCheck.success) {
+        await logger.error('Sandbox health check failed')
+        throw new Error('Sandbox created but not responsive - health check failed')
+      }
 
       // Check for cancellation after sandbox creation
       if (config.onCancellationCheck && (await config.onCancellationCheck())) {

@@ -1,13 +1,12 @@
 import { Sandbox } from '@vercel/sandbox'
 import { Writable } from 'stream'
-import { runCommandInSandbox, runInProject, PROJECT_DIR } from '../commands'
+import { runCommandInSandbox, runAndLogCommand, PROJECT_DIR } from '../commands'
 import { AgentExecutionResult } from '../types'
 import { redactSensitiveInfo } from '@/lib/utils/logging'
 import { TaskLogger } from '@/lib/utils/task-logger'
 import { connectors, taskMessages } from '@/lib/db/schema'
 import { db } from '@/lib/db/client'
 import { eq } from 'drizzle-orm'
-import { generateId } from '@/lib/utils/id'
 
 const MAX_OUTPUT_SIZE_BYTES = 10 * 1024 * 1024 // 10MB output limit
 
@@ -80,55 +79,6 @@ function buildMcpJsonConfig(mcpServers: Connector[]): Record<string, unknown> {
   }
 
   return { mcpServers: mcpServersConfig }
-}
-
-// Helper function to run command and collect logs in project directory
-async function runAndLogCommand(sandbox: Sandbox, command: string, args: string[], logger: TaskLogger) {
-  const fullCommand = args.length > 0 ? `${command} ${args.join(' ')}` : command
-  const redactedCommand = redactSensitiveInfo(fullCommand)
-
-  // Log to both local logs and database if logger is provided
-  await logger.command(redactedCommand)
-  if (logger) {
-    await logger.command(redactedCommand)
-  }
-
-  const result = await runInProject(sandbox, command, args)
-
-  // Only try to access properties if result is valid
-  if (result && result.output && result.output.trim()) {
-    const redactedOutput = redactSensitiveInfo(result.output.trim())
-    await logger.info(redactedOutput)
-    if (logger) {
-      await logger.info(redactedOutput)
-    }
-  }
-
-  if (result && !result.success && result.error) {
-    const redactedError = redactSensitiveInfo(result.error)
-    await logger.error(redactedError)
-    if (logger) {
-      await logger.error(redactedError)
-    }
-  }
-
-  // If result is null/undefined, create a fallback result
-  if (!result) {
-    const errorResult = {
-      success: false,
-      error: 'Command execution failed - no result returned',
-      exitCode: -1,
-      output: '',
-      command: redactedCommand,
-    }
-    await logger.error('Command execution failed - no result returned')
-    if (logger) {
-      await logger.error('Command execution failed - no result returned')
-    }
-    return errorResult
-  }
-
-  return result
 }
 
 export async function installClaudeCLI(
@@ -466,7 +416,7 @@ export async function executeClaudeInSandbox(
                       })
                       .where(eq(taskMessages.id, agentMessageId))
                       .then(() => {})
-                      .catch((err) => console.error('Failed to update message'))
+                      .catch(() => console.error('Failed to update streaming message'))
                   }
                   // Handle tool use
                   else if (contentBlock.type === 'tool_use') {
@@ -508,7 +458,7 @@ export async function executeClaudeInSandbox(
                         })
                         .where(eq(taskMessages.id, agentMessageId))
                         .then(() => {})
-                        .catch((err) => console.error('Failed to update message'))
+                        .catch(() => console.error('Failed to update streaming message'))
                     }
                   }
                 }

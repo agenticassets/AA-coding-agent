@@ -1,5 +1,5 @@
 import { Sandbox } from '@vercel/sandbox'
-import { runCommandInSandbox, runInProject, PROJECT_DIR } from '../commands'
+import { runCommandInSandbox, runAndLogCommand, PROJECT_DIR } from '../commands'
 import { AgentExecutionResult } from '../types'
 import { redactSensitiveInfo } from '@/lib/utils/logging'
 import { TaskLogger } from '@/lib/utils/task-logger'
@@ -10,30 +10,12 @@ import { generateId } from '@/lib/utils/id'
 
 type Connector = typeof connectors.$inferSelect
 
-// Helper function to run command in sandbox root (for installation checks)
+// Helper function to run command in sandbox root (for installation checks, not project directory)
 async function runAndLogCommandRoot(sandbox: Sandbox, command: string, args: string[], logger: TaskLogger) {
   const fullCommand = args.length > 0 ? `${command} ${args.join(' ')}` : command
   await logger.command(redactSensitiveInfo(fullCommand))
 
   const result = await runCommandInSandbox(sandbox, command, args)
-
-  if (result.output && result.output.trim()) {
-    await logger.info(redactSensitiveInfo(result.output.trim()))
-  }
-
-  if (!result.success && result.error) {
-    await logger.error(redactSensitiveInfo(result.error))
-  }
-
-  return result
-}
-
-// Helper function to run command in project directory (for git operations)
-async function runAndLogCommand(sandbox: Sandbox, command: string, args: string[], logger: TaskLogger) {
-  const fullCommand = args.length > 0 ? `${command} ${args.join(' ')}` : command
-  await logger.command(redactSensitiveInfo(fullCommand))
-
-  const result = await runInProject(sandbox, command, args)
 
   if (result.output && result.output.trim()) {
     await logger.info(redactSensitiveInfo(result.output.trim()))
@@ -389,7 +371,7 @@ EOF`
                       db.update(taskMessages)
                         .set({ content: accumulatedContent })
                         .where(eq(taskMessages.id, agentMessageId))
-                        .catch((err: Error) => console.error('Failed to update message'))
+                        .catch(() => console.error('Failed to update streaming message'))
                     }
                   }
                 } else if (parsed.type === 'assistant' && parsed.message?.content) {
@@ -405,7 +387,7 @@ EOF`
                     db.update(taskMessages)
                       .set({ content: accumulatedContent })
                       .where(eq(taskMessages.id, agentMessageId))
-                      .catch((err: Error) => console.error('Failed to update message'))
+                      .catch(() => console.error('Failed to update streaming message'))
                   }
                 }
               }
