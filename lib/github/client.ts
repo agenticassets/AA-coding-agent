@@ -1,6 +1,35 @@
 import { Octokit } from '@octokit/rest'
 import { getUserGitHubToken } from './user-token'
 
+type GitHubErrorResult = { success: false; error: string }
+
+function createErrorResult(error: string): GitHubErrorResult {
+  return { success: false, error }
+}
+
+function getErrorMessageFromStatus(status: number, context: string): string {
+  const messages: Record<number, string> = {
+    403: 'Permission denied. Check repository access',
+    404: context === 'pr' ? 'Pull request not found' : 'Repository not found or no access',
+    405: 'Pull request is not mergeable',
+    409: 'Merge conflict - cannot auto-merge',
+    422: 'Pull request already exists or branch does not exist',
+  }
+  return messages[status] || `Failed to ${context}`
+}
+
+function handleGitHubError(error: unknown, context: string): GitHubErrorResult {
+  console.error(`Error ${context}`)
+
+  if (error && typeof error === 'object' && 'status' in error) {
+    const status = (error as { status: number }).status
+    const message = getErrorMessageFromStatus(status, context)
+    return createErrorResult(message)
+  }
+
+  return createErrorResult(`Failed to ${context}`)
+}
+
 /**
  * Create an Octokit instance for the currently authenticated user
  * Returns an Octokit instance with the user's GitHub token if connected, otherwise without authentication
@@ -89,6 +118,18 @@ interface CreatePullRequestResult {
   error?: string
 }
 
+async function requireGitHubAuth<T>(
+  callback: (octokit: Octokit) => Promise<T>
+): Promise<T | GitHubErrorResult> {
+  const octokit = await getOctokit()
+
+  if (!octokit.auth) {
+    return createErrorResult('GitHub account not connected')
+  }
+
+  return callback(octokit)
+}
+
 /**
  * Create a pull request on GitHub
  */
@@ -98,26 +139,17 @@ export async function createPullRequest(params: CreatePullRequestParams): Promis
   try {
     const octokit = await getOctokit()
 
-    // Check if user has connected GitHub
     if (!octokit.auth) {
-      return {
-        success: false,
-        error: 'GitHub account not connected',
-      }
+      return createErrorResult('GitHub account not connected')
     }
 
-    // Parse repository URL
     const parsed = parseGitHubUrl(repoUrl)
     if (!parsed) {
-      return {
-        success: false,
-        error: 'Invalid GitHub repository URL',
-      }
+      return createErrorResult('Invalid GitHub repository URL')
     }
 
     const { owner, repo } = parsed
 
-    // Create the pull request
     const response = await octokit.rest.pulls.create({
       owner,
       repo,
@@ -133,35 +165,7 @@ export async function createPullRequest(params: CreatePullRequestParams): Promis
       prNumber: response.data.number,
     }
   } catch (error: unknown) {
-    console.error('Error creating pull request')
-
-    // Handle specific error cases
-    if (error && typeof error === 'object' && 'status' in error) {
-      const status = (error as { status: number }).status
-      if (status === 422) {
-        return {
-          success: false,
-          error: 'Pull request already exists or branch does not exist',
-        }
-      }
-      if (status === 403) {
-        return {
-          success: false,
-          error: 'Permission denied. Check repository access',
-        }
-      }
-      if (status === 404) {
-        return {
-          success: false,
-          error: 'Repository not found or no access',
-        }
-      }
-    }
-
-    return {
-      success: false,
-      error: 'Failed to create pull request',
-    }
+    return handleGitHubError(error, 'create pull request')
   }
 }
 
@@ -202,26 +206,17 @@ export async function mergePullRequest(params: MergePullRequestParams): Promise<
   try {
     const octokit = await getOctokit()
 
-    // Check if user has connected GitHub
     if (!octokit.auth) {
-      return {
-        success: false,
-        error: 'GitHub account not connected',
-      }
+      return createErrorResult('GitHub account not connected')
     }
 
-    // Parse repository URL
     const parsed = parseGitHubUrl(repoUrl)
     if (!parsed) {
-      return {
-        success: false,
-        error: 'Invalid GitHub repository URL',
-      }
+      return createErrorResult('Invalid GitHub repository URL')
     }
 
     const { owner, repo } = parsed
 
-    // Merge the pull request
     const response = await octokit.rest.pulls.merge({
       owner,
       repo,
@@ -238,42 +233,14 @@ export async function mergePullRequest(params: MergePullRequestParams): Promise<
       sha: response.data.sha,
     }
   } catch (error: unknown) {
-    console.error('Error merging pull request')
-
-    // Handle specific error cases
-    if (error && typeof error === 'object' && 'status' in error) {
-      const status = (error as { status: number }).status
-      if (status === 405) {
-        return {
-          success: false,
-          error: 'Pull request is not mergeable',
-        }
-      }
-      if (status === 409) {
-        return {
-          success: false,
-          error: 'Merge conflict - cannot auto-merge',
-        }
-      }
-      if (status === 403) {
-        return {
-          success: false,
-          error: 'Permission denied. Check repository access',
-        }
-      }
-      if (status === 404) {
-        return {
-          success: false,
-          error: 'Pull request not found',
-        }
-      }
-    }
-
-    return {
-      success: false,
-      error: 'Failed to merge pull request',
-    }
+    return handleGitHubError(error, 'merge pull request')
   }
+}
+
+function getPrStatusFromResponse(data: { merged_at: string | null; state: string }): 'open' | 'closed' | 'merged' {
+  if (data.merged_at) return 'merged'
+  if (data.state === 'closed') return 'closed'
+  return 'open'
 }
 
 /**
@@ -285,70 +252,29 @@ export async function getPullRequestStatus(params: GetPullRequestStatusParams): 
   try {
     const octokit = await getOctokit()
 
-    // Check if user has connected GitHub
     if (!octokit.auth) {
-      return {
-        success: false,
-        error: 'GitHub account not connected',
-      }
+      return createErrorResult('GitHub account not connected')
     }
 
-    // Parse repository URL
     const parsed = parseGitHubUrl(repoUrl)
     if (!parsed) {
-      return {
-        success: false,
-        error: 'Invalid GitHub repository URL',
-      }
+      return createErrorResult('Invalid GitHub repository URL')
     }
 
     const { owner, repo } = parsed
 
-    // Get the pull request
     const response = await octokit.rest.pulls.get({
       owner,
       repo,
       pull_number: prNumber,
     })
 
-    // Determine status based on state and merged_at
-    let status: 'open' | 'closed' | 'merged'
-    if (response.data.merged_at) {
-      status = 'merged'
-    } else if (response.data.state === 'closed') {
-      status = 'closed'
-    } else {
-      status = 'open'
-    }
-
     return {
       success: true,
-      status,
+      status: getPrStatusFromResponse(response.data),
       mergeCommitSha: response.data.merge_commit_sha || undefined,
     }
   } catch (error: unknown) {
-    console.error('Error getting pull request status')
-
-    // Handle specific error cases
-    if (error && typeof error === 'object' && 'status' in error) {
-      const status = (error as { status: number }).status
-      if (status === 404) {
-        return {
-          success: false,
-          error: 'Pull request not found',
-        }
-      }
-      if (status === 403) {
-        return {
-          success: false,
-          error: 'Permission denied. Check repository access',
-        }
-      }
-    }
-
-    return {
-      success: false,
-      error: 'Failed to get pull request status',
-    }
+    return handleGitHubError(error, 'get pull request status')
   }
 }
