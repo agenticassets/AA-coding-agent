@@ -33,10 +33,9 @@ async function getUserTask(taskId: string, userId: string) {
 
 export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
-    const user = await getAuthenticatedUser(request)
+    const [user, { taskId }] = await Promise.all([getAuthenticatedUser(request), params])
     if (!user) return jsonError('Unauthorized', 401)
 
-    const { taskId } = await params
     const task = await getUserTask(taskId, user.id)
 
     if (!task) return jsonError('Task not found', 404)
@@ -98,15 +97,13 @@ async function terminateSandbox(taskId: string, logger: ReturnType<typeof create
 
 export async function PATCH(request: NextRequest, { params }: RouteParams) {
   try {
-    const user = await getAuthenticatedUser(request)
+    const [user, { taskId }] = await Promise.all([getAuthenticatedUser(request), params])
     if (!user) return jsonError('Unauthorized', 401)
-
-    const { taskId } = await params
-    const body = await request.json()
 
     const existingTask = await getUserTask(taskId, user.id)
     if (!existingTask) return jsonError('Task not found', 404)
 
+    const body = await request.json()
     if (body.action !== 'stop') return jsonError('Invalid action', 400)
 
     if (existingTask.status !== 'processing') {
@@ -129,10 +126,8 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
 
 export async function DELETE(request: NextRequest, { params }: RouteParams) {
   try {
-    const user = await getAuthenticatedUser(request)
+    const [user, { taskId }] = await Promise.all([getAuthenticatedUser(request), params])
     if (!user) return jsonError('Unauthorized', 401)
-
-    const { taskId } = await params
 
     const existingTask = await getUserTask(taskId, user.id)
     if (!existingTask) return jsonError('Task not found', 404)

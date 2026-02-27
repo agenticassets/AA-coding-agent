@@ -118,9 +118,7 @@ interface CreatePullRequestResult {
   error?: string
 }
 
-async function requireGitHubAuth<T>(
-  callback: (octokit: Octokit) => Promise<T>
-): Promise<T | GitHubErrorResult> {
+async function requireGitHubAuth<T>(callback: (octokit: Octokit) => Promise<T>): Promise<T | GitHubErrorResult> {
   const octokit = await getOctokit()
 
   if (!octokit.auth) {

@@ -394,60 +394,56 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         }
       }
 
-      // Get old content from base ref
-      try {
-        const result = await getFileContent(octokit, owner, repo, filename, baseRef, isImage)
-        oldContent = result.content
-        oldIsBase64 = result.isBase64
-      } catch (error: unknown) {
-        if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
-          // Try master if main doesn't work (only if we're using default branch names)
-          if (baseRef === 'main') {
-            try {
-              const result = await getFileContent(octokit, owner, repo, filename, 'master', isImage)
-              oldContent = result.content
-              oldIsBase64 = result.isBase64
-              baseRef = 'master'
-            } catch (masterError: unknown) {
-              if (
-                !(
-                  masterError &&
-                  typeof masterError === 'object' &&
-                  'status' in masterError &&
-                  masterError.status === 404
-                )
-              ) {
-                throw masterError
+      const oldContentPromise = (async (): Promise<{ content: string; isBase64: boolean }> => {
+        try {
+          return await getFileContent(octokit, owner, repo, filename, baseRef, isImage)
+        } catch (error: unknown) {
+          if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
+            // Try master if main doesn't work (only if we're using default branch names)
+            if (baseRef === 'main') {
+              try {
+                const result = await getFileContent(octokit, owner, repo, filename, 'master', isImage)
+                baseRef = 'master'
+                return result
+              } catch (masterError: unknown) {
+                if (
+                  !(
+                    masterError &&
+                    typeof masterError === 'object' &&
+                    'status' in masterError &&
+                    masterError.status === 404
+                  )
+                ) {
+                  throw masterError
+                }
               }
-              // File doesn't exist in base (could be a new file)
-              oldContent = ''
-              oldIsBase64 = false
             }
-          } else {
-            // File doesn't exist at this commit (new file)
-            oldContent = ''
-            oldIsBase64 = false
-          }
-        } else {
-          throw error
-        }
-      }
 
-      // Get new content from head ref
-      try {
-        const result = await getFileContent(octokit, owner, repo, filename, headRef, isImage)
-        newContent = result.content
-        newIsBase64 = result.isBase64
-      } catch (error) {
-        console.error('Error fetching new content from ref:')
-        // File might have been deleted
-        if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
-          newContent = ''
-          newIsBase64 = false
-        } else {
+            // File doesn't exist in base (could be a new file)
+            return { content: '', isBase64: false }
+          }
+
           throw error
         }
-      }
+      })()
+      const newContentPromise = (async (): Promise<{ content: string; isBase64: boolean }> => {
+        try {
+          return await getFileContent(octokit, owner, repo, filename, headRef, isImage)
+        } catch (error) {
+          console.error('Error fetching new content from ref:')
+          // File might have been deleted
+          if (error && typeof error === 'object' && 'status' in error && error.status === 404) {
+            return { content: '', isBase64: false }
+          }
+          throw error
+        }
+      })()
+      const [baseContent, headContent] = await Promise.all([oldContentPromise, newContentPromise])
+
+      oldContent = baseContent.content
+      oldIsBase64 = baseContent.isBase64
+      newContent = headContent.content
+      newIsBase64 = headContent.isBase64
 
       // Validate that we have content (at least one should be non-empty for a valid diff)
       if (!oldContent && !newContent) {

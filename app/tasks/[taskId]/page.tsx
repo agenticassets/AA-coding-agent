@@ -3,6 +3,7 @@ import { getServerSession } from '@/lib/session/get-server-session'
 import { getGitHubStars } from '@/lib/github-stars'
 import { getMaxSandboxDuration } from '@/lib/db/settings'
 import { Metadata } from 'next'
+import { Suspense } from 'react'
 
 interface TaskPageProps {
   params: Promise<{
@@ -10,7 +11,21 @@ interface TaskPageProps {
   }>
 }
 
-export default async function TaskPage({ params }: TaskPageProps) {
+export default function TaskPage({ params }: TaskPageProps) {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-[50vh] items-center justify-center">
+          <p className="text-sm text-muted-foreground">Loading task...</p>
+        </div>
+      }
+    >
+      <TaskPageContent params={params} />
+    </Suspense>
+  )
+}
+
+async function TaskPageContent({ params }: TaskPageProps) {
   const { taskId } = await params
 
   // Start independent fetches in parallel
