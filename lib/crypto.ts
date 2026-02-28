@@ -1,7 +1,10 @@
 import crypto from 'crypto'
 
-const ALGORITHM = 'aes-256-cbc'
-const IV_LENGTH = 16
+const ALGORITHM_GCM = 'aes-256-gcm'
+const ALGORITHM_CBC = 'aes-256-cbc'
+const IV_LENGTH_GCM = 12
+const IV_LENGTH_CBC = 16
+const TAG_LENGTH = 16
 
 const getEncryptionKey = (): Buffer | null => {
   const key = process.env.ENCRYPTION_KEY
@@ -27,11 +30,12 @@ export const encrypt = (text: string): string => {
     )
   }
 
-  const iv = crypto.randomBytes(IV_LENGTH)
-  const cipher = crypto.createCipheriv(ALGORITHM, ENCRYPTION_KEY, iv)
+  const iv = crypto.randomBytes(IV_LENGTH_GCM)
+  const cipher = crypto.createCipheriv(ALGORITHM_GCM, ENCRYPTION_KEY, iv)
   const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()])
+  const tag = cipher.getAuthTag()
 
-  return `${iv.toString('hex')}:${encrypted.toString('hex')}`
+  return `${iv.toString('hex')}:${encrypted.toString('hex')}:${tag.toString('hex')}`
 }
 
 export const decrypt = (encryptedText: string): string | null => {
@@ -49,14 +53,34 @@ export const decrypt = (encryptedText: string): string | null => {
   }
 
   try {
-    const [ivHex, encryptedHex] = encryptedText.split(':')
-    const iv = Buffer.from(ivHex, 'hex')
-    const encrypted = Buffer.from(encryptedHex, 'hex')
+    const parts = encryptedText.split(':')
 
-    const decipher = crypto.createDecipheriv(ALGORITHM, ENCRYPTION_KEY, iv)
-    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()])
+    if (parts.length === 3) {
+      // GCM format: iv:encrypted:tag (new format)
+      const [ivHex, encryptedHex, tagHex] = parts
+      const iv = Buffer.from(ivHex, 'hex')
+      const encrypted = Buffer.from(encryptedHex, 'hex')
+      const tag = Buffer.from(tagHex, 'hex')
 
-    return decrypted.toString('utf8')
+      const decipher = crypto.createDecipheriv(ALGORITHM_GCM, ENCRYPTION_KEY, iv)
+      decipher.setAuthTag(tag)
+      const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()])
+
+      return decrypted.toString('utf8')
+    } else if (parts.length === 2) {
+      // CBC format: iv:encrypted (legacy format for backward compatibility)
+      const [ivHex, encryptedHex] = parts
+      const iv = Buffer.from(ivHex, 'hex')
+      const encrypted = Buffer.from(encryptedHex, 'hex')
+
+      const decipher = crypto.createDecipheriv(ALGORITHM_CBC, ENCRYPTION_KEY, iv)
+      const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()])
+
+      return decrypted.toString('utf8')
+    } else {
+      console.error('Invalid encrypted format detected')
+      return null
+    }
   } catch {
     console.error('Decryption failed')
     return null

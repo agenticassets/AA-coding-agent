@@ -119,6 +119,8 @@ export function TaskSidebar({ tasks, width = 288 }: TaskSidebarProps) {
   const [searchPage, setSearchPage] = useState(1)
   const [searchHasMore, setSearchHasMore] = useState(false)
   const loadMoreRef = useRef<HTMLDivElement>(null)
+  const searchAbortControllerRef = useRef<AbortController | null>(null)
+  const searchQueryRef = useRef<string>('')
 
   // Close sidebar on mobile when clicking any link
   const handleLinkClick = () => {
@@ -168,10 +170,21 @@ export function TaskSidebar({ tasks, width = 288 }: TaskSidebarProps) {
       return
     }
 
+    searchQueryRef.current = query
+
+    // Cancel previous search request if it's still in progress
+    if (searchAbortControllerRef.current) {
+      searchAbortControllerRef.current.abort()
+    }
+
+    const abortController = new AbortController()
+    searchAbortControllerRef.current = abortController
+
     startSearchTransition(async () => {
       try {
         const response = await fetch(
           `/api/github/user-repos?page=${page}&per_page=25&search=${encodeURIComponent(query)}`,
+          { signal: abortController.signal },
         )
 
         if (!response.ok) {
@@ -180,16 +193,25 @@ export function TaskSidebar({ tasks, width = 288 }: TaskSidebarProps) {
 
         const data = await response.json()
 
-        if (append) {
-          setSearchResults((prev) => [...prev, ...data.repos])
-        } else {
-          setSearchResults(data.repos)
-        }
+        // Only update results if this is still the current query (prevent race conditions)
+        if (searchQueryRef.current === query) {
+          if (append) {
+            setSearchResults((prev) => [...prev, ...data.repos])
+          } else {
+            setSearchResults(data.repos)
+          }
 
-        setSearchHasMore(data.has_more)
-        setSearchPage(page)
+          setSearchHasMore(data.has_more)
+          setSearchPage(page)
+        }
       } catch (error) {
-        console.error('Error searching repos')
+        // Only update error state if this is still the current query and not an abort
+        if (searchQueryRef.current === query && !(error instanceof Error && error.name === 'AbortError')) {
+          console.error('Error searching repos')
+          // Clear loading state on error
+          setSearchResults([])
+          setSearchHasMore(false)
+        }
       }
     })
   }, [])
@@ -238,7 +260,7 @@ export function TaskSidebar({ tasks, width = 288 }: TaskSidebarProps) {
         }
       })
     },
-    [reposLoading, startReposTransition],
+    [startReposTransition],
   )
 
   // Load repos when switching to repos tab or when GitHub is connected

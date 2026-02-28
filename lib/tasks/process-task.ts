@@ -449,7 +449,7 @@ export async function processTaskWithTimeout(input: TaskProcessingInput): Promis
     if (timeoutController.interval) {
       clearInterval(timeoutController.interval)
     }
-    if (error instanceof Error && error.message?.includes('timed out after')) {
+    if (error instanceof Error && error.message?.includes('Task execution timed out')) {
       console.error('Task timed out')
       const timeoutLogger = createTaskLogger(input.taskId)
       await timeoutLogger.error('Task execution timed out')
@@ -810,7 +810,10 @@ async function processTask(input: TaskProcessingInput): Promise<void> {
         commitMessage = createFallbackCommitMessage(prompt)
       }
 
-      const pushResult = await pushChangesToBranch(sandbox!, branchName!, commitMessage, logger)
+      if (!sandbox || !branchName) {
+        throw new Error('Sandbox or branch name unavailable for push operation')
+      }
+      const pushResult = await pushChangesToBranch(sandbox, branchName, commitMessage, logger)
 
       if (keepAlive) {
         await logger.info('Sandbox kept alive for follow-up messages')

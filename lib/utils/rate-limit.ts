@@ -1,6 +1,6 @@
 import { db } from '@/lib/db/client'
 import { tasks, taskMessages } from '@/lib/db/schema'
-import { eq, gte, and, isNull } from 'drizzle-orm'
+import { eq, gte, and, isNull, count } from 'drizzle-orm'
 import { getMaxMessagesPerDay } from '@/lib/db/settings'
 import { ADMIN_MAX_MESSAGES_PER_DAY } from '@/lib/constants'
 import { isAdminUser } from '@/lib/utils/admin-domains'
@@ -22,15 +22,15 @@ export async function checkRateLimit(
   const tomorrow = new Date(today)
   tomorrow.setUTCDate(tomorrow.getUTCDate() + 1)
 
-  // Count tasks created by this user today (excluding soft-deleted tasks)
-  const tasksToday = await db
-    .select()
+  // Count tasks created by this user today (excluding soft-deleted tasks) using SQL COUNT aggregation
+  const [taskResult] = await db
+    .select({ taskCount: count() })
     .from(tasks)
     .where(and(eq(tasks.userId, user.id), gte(tasks.createdAt, today), isNull(tasks.deletedAt)))
 
-  // Count user messages sent today across all tasks
-  const userMessagesToday = await db
-    .select()
+  // Count user messages sent today across all tasks using SQL COUNT aggregation
+  const [messageResult] = await db
+    .select({ messageCount: count() })
     .from(taskMessages)
     .innerJoin(tasks, eq(taskMessages.taskId, tasks.id))
     .where(
@@ -43,9 +43,11 @@ export async function checkRateLimit(
     )
 
   // Total count includes both new tasks and follow-up messages
-  const count = tasksToday.length + userMessagesToday.length
-  const remaining = Math.max(0, maxMessagesPerDay - count)
-  const allowed = count < maxMessagesPerDay
+  const taskCount = taskResult?.taskCount || 0
+  const messageCount = messageResult?.messageCount || 0
+  const count_total = taskCount + messageCount
+  const remaining = Math.max(0, maxMessagesPerDay - count_total)
+  const allowed = count_total < maxMessagesPerDay
 
   return {
     allowed,

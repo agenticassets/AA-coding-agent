@@ -294,8 +294,7 @@ export function TaskForm({
     if (textareaRef.current) {
       textareaRef.current.focus()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [searchParams, savedAgent])
 
   // Get saved model atom for current agent
   const savedModelAtom = lastSelectedModelAtomFamily(selectedAgent)

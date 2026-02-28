@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -37,10 +37,15 @@ export function CreatePRDialog({
   const [title, setTitle] = useState(defaultTitle)
   const [body, setBody] = useState(defaultBody)
   const [isCreating, setIsCreating] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
 
   // Use centralized resize hook to detect mobile (breakpoint: 768px)
   const { isDesktop } = useWindowResize(768)
-  const isMobile = !isDesktop
+
+  // Sync mobile state with actual window size after hydration
+  useEffect(() => {
+    setIsMobile(!isDesktop)
+  }, [isDesktop])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

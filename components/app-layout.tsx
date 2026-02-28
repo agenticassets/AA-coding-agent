@@ -172,6 +172,7 @@ export function AppLayout({ children, initialSidebarWidth, initialSidebarOpen, i
   }, [isSidebarOpen, updateSidebarOpen])
 
   const toggleSidebarRef = useLatest(toggleSidebar)
+  const isSidebarOpenRef = useLatest(isSidebarOpen)
 
   // Handle window resize - close sidebar on mobile and update isDesktop
   useWindowResize(1024, () => {
@@ -179,7 +180,7 @@ export function AppLayout({ children, initialSidebarWidth, initialSidebarOpen, i
     setIsDesktop(newIsDesktop)
 
     // On mobile, always close sidebar
-    if (!newIsDesktop && isSidebarOpen) {
+    if (!newIsDesktop && isSidebarOpenRef.current) {
       setIsSidebarOpen(false)
     }
   })

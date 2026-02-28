@@ -66,7 +66,6 @@ export async function pushChangesToBranch(
       return { success: true, pushFailed: true }
     }
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
     await logger.info('Error pushing changes')
     return { success: false }
   }

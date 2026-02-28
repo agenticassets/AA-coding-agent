@@ -483,7 +483,7 @@ export function TaskChat({ taskId, task }: TaskChatProps) {
 
   const handleSendCommentAsFollowUp = (comment: PRComment) => {
     // Format the message to indicate it came from a PR comment
-    const formattedMessage = `**PR Comment from @${comment.user.login}:**\n\n${comment.body}\n\n---\n\nPlease address the above PR comment and make the necessary changes to ensure the feedback is accurately addressed.`
+    const formattedMessage = `**PR Comment from @${comment.user?.login ?? 'unknown'}:**\n\n${comment.body}\n\n---\n\nPlease address the above PR comment and make the necessary changes to ensure the feedback is accurately addressed.`
 
     // Set the message in the chat input
     setNewMessage(formattedMessage)

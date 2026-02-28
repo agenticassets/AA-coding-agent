@@ -87,29 +87,17 @@ async function runAndLogCommand(sandbox: Sandbox, command: string, args: string[
   const fullCommand = args.length > 0 ? `${command} ${args.join(' ')}` : command
   const redactedCommand = redactSensitiveInfo(fullCommand)
 
-  // Log to both local logs and database if logger is provided
   await logger.command(redactedCommand)
-  if (logger) {
-    await logger.command(redactedCommand)
-  }
 
   const result = await runInProject(sandbox, command, args)
 
   // Only try to access properties if result is valid
   if (result && result.output && result.output.trim()) {
-    const redactedOutput = redactSensitiveInfo(result.output.trim())
-    await logger.info(redactedOutput)
-    if (logger) {
-      await logger.info(redactedOutput)
-    }
+    await logger.info('Command output received')
   }
 
   if (result && !result.success && result.error) {
-    const redactedError = redactSensitiveInfo(result.error)
-    await logger.error(redactedError)
-    if (logger) {
-      await logger.error(redactedError)
-    }
+    await logger.error('Command execution error')
   }
 
   // If result is null/undefined, create a fallback result
@@ -122,9 +110,6 @@ async function runAndLogCommand(sandbox: Sandbox, command: string, args: string[
       command: redactedCommand,
     }
     await logger.error('Command execution failed - no result returned')
-    if (logger) {
-      await logger.error('Command execution failed - no result returned')
-    }
     return errorResult
   }
 
